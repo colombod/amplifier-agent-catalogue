@@ -960,11 +960,12 @@
 
             <!-- Loading state -->
             <div class="hidden" id="step-4-loading">
-                <div style="text-align: center; padding: 2rem;">
+                <div style="text-align: center; padding: 1rem 2rem 0.5rem;" id="evaluate-spinner-wrap">
                     <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
                     <p class="mt-1">Evaluating agent quality...</p>
                     <p class="text-muted text-sm" id="evaluate-progress">Scoring across 5 dimensions</p>
                 </div>
+                <div id="evaluate-activity-feed" class="activity-feed" style="display:none;"></div>
             </div>
 
             <!-- Evaluation results -->
@@ -980,10 +981,13 @@
 
             <!-- Improvement review -->
             <div class="hidden" id="step-4-improve" style="border-top: 2px solid var(--border); margin-top: 1.5rem; padding-top: 1.5rem;">
-                <div style="text-align: center; padding: 2rem;" id="improve-loading">
-                    <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
-                    <p class="mt-1">Generating improved version...</p>
-                    <p class="text-muted text-sm" id="improve-progress">Referencing existing agents to differentiate</p>
+                <div id="improve-loading">
+                    <div style="text-align: center; padding: 1rem 2rem 0.5rem;" id="improve-spinner-wrap">
+                        <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
+                        <p class="mt-1">Generating improved version...</p>
+                        <p class="text-muted text-sm" id="improve-progress">Referencing existing agents to differentiate</p>
+                    </div>
+                    <div id="improve-activity-feed" class="activity-feed" style="display:none;"></div>
                 </div>
 
                 <div class="hidden" id="improve-results">
@@ -1065,6 +1069,7 @@
 </div>
 
 {% include "components/diff_view.html" %}
+{% include "components/activity_feed.html" %}
 
 <script>
 let analysisData = null;
@@ -1318,6 +1323,30 @@ function enableStep4() {
 async function runQualityEvaluation() {
     if (!uploadedFile) return;
 
+    // Read file content for the streaming endpoint (accepts JSON, not FormData)
+    let contentStr;
+    try { contentStr = await uploadedFile.text(); } catch { contentStr = null; }
+
+    // Try streaming endpoint first — shows real-time agent reasoning
+    if (contentStr) {
+        const feedEl = document.getElementById('evaluate-activity-feed');
+        const spinnerWrap = document.getElementById('evaluate-spinner-wrap');
+        feedEl.style.display = 'block';
+        spinnerWrap.style.display = 'none';
+
+        const feed = new ActivityFeed('evaluate-activity-feed');
+        try {
+            evaluationData = await feed.start('/api/stream/evaluate', { content: contentStr });
+            displayQualityEvaluation(evaluationData);
+            return;
+        } catch {
+            // Streaming failed — fall through to classic endpoint
+            feedEl.style.display = 'none';
+            spinnerWrap.style.display = '';
+        }
+    }
+
+    // Fallback: classic non-streaming endpoint
     const formData = new FormData();
     formData.append('file', uploadedFile);
 
@@ -1528,6 +1557,65 @@ function proceedFromQuality() {
     document.getElementById('step-5-card').scrollIntoView({ behavior: 'smooth' });
 }
 
+/** Display improve results (shared by streaming and classic paths). */
+async function _displayImproveResults(data) {
+    improvedContent = data.improved_content;
+
+    document.getElementById('improve-loading').classList.add('hidden');
+    document.getElementById('improve-results').classList.remove('hidden');
+
+    // Show catalogue neighbors used as context
+    if (data.catalogue_neighbors && data.catalogue_neighbors.length > 0) {
+        document.getElementById('catalogue-context-section').classList.remove('hidden');
+        document.getElementById('catalogue-neighbors-list').innerHTML =
+            data.catalogue_neighbors.map(n => `
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border);
+                            border-radius: 8px; padding: 0.5rem 0.75rem; font-size: 0.85rem;
+                            max-width: 280px;">
+                    <div style="font-weight: 600; margin-bottom: 0.15rem;">${n.name}
+                        <span style="color: var(--text-muted); font-weight: 400; font-size: 0.75rem;">
+                            ${Math.round(n.similarity_score * 100)}%
+                        </span>
+                    </div>
+                    <div style="color: var(--text-muted); font-size: 0.78rem;
+                                overflow: hidden; text-overflow: ellipsis;
+                                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+                        ${n.description || 'No description'}
+                    </div>
+                </div>
+            `).join('');
+    }
+
+    // Token comparison (before vs after)
+    renderTokenComparison(
+        'improve-token-comparison',
+        data.original_token_metrics,
+        data.improved_token_metrics
+    );
+
+    // Render section-level diff
+    renderImprovementDiff(data.changes);
+
+    // Show action buttons immediately (recheck is informational, not blocking)
+    document.getElementById('improve-actions').classList.remove('hidden');
+
+    // Run re-duplication check on improved content
+    await recheckDuplication(improvedContent);
+}
+
+/** Show improve error and restore the quality choices panel. */
+function _showImproveError(message) {
+    document.getElementById('step-4-improve').classList.add('hidden');
+    document.getElementById('quality-choices').classList.remove('hidden');
+    const prevImpErr = document.getElementById('improve-error');
+    if (prevImpErr) prevImpErr.remove();
+    document.getElementById('issues-display').insertAdjacentHTML('afterend',
+        `<div class="decision-box danger" id="improve-error">
+            <div class="decision-title">Improvement unavailable</div>
+            <div>${message}</div>
+        </div>`);
+}
+
 async function requestImprovement() {
     if (!uploadedFile) return;
 
@@ -1537,6 +1625,30 @@ async function requestImprovement() {
     document.getElementById('improve-loading').classList.remove('hidden');
     document.getElementById('improve-results').classList.add('hidden');
 
+    // Read file content for streaming endpoint
+    let contentStr;
+    try { contentStr = await uploadedFile.text(); } catch { contentStr = null; }
+
+    // Try streaming endpoint first — shows real-time agent reasoning
+    if (contentStr) {
+        const feedEl = document.getElementById('improve-activity-feed');
+        const spinnerWrap = document.getElementById('improve-spinner-wrap');
+        feedEl.style.display = 'block';
+        spinnerWrap.style.display = 'none';
+
+        const feed = new ActivityFeed('improve-activity-feed');
+        try {
+            const data = await feed.start('/api/stream/improve', { content: contentStr });
+            await _displayImproveResults(data);
+            return;
+        } catch {
+            // Streaming failed — fall through to classic endpoint
+            feedEl.style.display = 'none';
+            spinnerWrap.style.display = '';
+        }
+    }
+
+    // Fallback: classic non-streaming endpoint
     const improveNarrative = startProgressNarrative('improve-progress', [
         'Reading your agent definition...',
         'Finding similar agents in catalogue...',
@@ -1557,74 +1669,17 @@ async function requestImprovement() {
         if (!response.ok) {
             if (improveNarrative) clearInterval(improveNarrative);
             const error = await response.json();
-            document.getElementById('step-4-improve').classList.add('hidden');
-            document.getElementById('quality-choices').classList.remove('hidden');
-            const prevImpErr = document.getElementById('improve-error');
-            if (prevImpErr) prevImpErr.remove();
-            document.getElementById('issues-display').insertAdjacentHTML('afterend',
-                `<div class="decision-box danger" id="improve-error">
-                    <div class="decision-title">Improvement unavailable</div>
-                    <div>${error.detail || 'Generation failed. You can store the current version.'}</div>
-                </div>`);
+            _showImproveError(error.detail || 'Generation failed. You can store the current version.');
             return;
         }
 
         if (improveNarrative) clearInterval(improveNarrative);
         const data = await response.json();
-        improvedContent = data.improved_content;
-
-        document.getElementById('improve-loading').classList.add('hidden');
-        document.getElementById('improve-results').classList.remove('hidden');
-
-        // Show catalogue neighbors used as context
-        if (data.catalogue_neighbors && data.catalogue_neighbors.length > 0) {
-            document.getElementById('catalogue-context-section').classList.remove('hidden');
-            document.getElementById('catalogue-neighbors-list').innerHTML =
-                data.catalogue_neighbors.map(n => `
-                    <div style="background: var(--bg-secondary); border: 1px solid var(--border);
-                                border-radius: 8px; padding: 0.5rem 0.75rem; font-size: 0.85rem;
-                                max-width: 280px;">
-                        <div style="font-weight: 600; margin-bottom: 0.15rem;">${n.name}
-                            <span style="color: var(--text-muted); font-weight: 400; font-size: 0.75rem;">
-                                ${Math.round(n.similarity_score * 100)}%
-                            </span>
-                        </div>
-                        <div style="color: var(--text-muted); font-size: 0.78rem;
-                                    overflow: hidden; text-overflow: ellipsis;
-                                    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
-                            ${n.description || 'No description'}
-                        </div>
-                    </div>
-                `).join('');
-        }
-
-        // Token comparison (before vs after)
-        renderTokenComparison(
-            'improve-token-comparison',
-            data.original_token_metrics,
-            data.improved_token_metrics
-        );
-
-        // Render section-level diff
-        renderImprovementDiff(data.changes);
-
-        // Show action buttons immediately (recheck is informational, not blocking)
-        document.getElementById('improve-actions').classList.remove('hidden');
-
-        // Run re-duplication check on improved content
-        await recheckDuplication(improvedContent);
+        await _displayImproveResults(data);
 
     } catch (error) {
         if (improveNarrative) clearInterval(improveNarrative);
-        document.getElementById('step-4-improve').classList.add('hidden');
-        document.getElementById('quality-choices').classList.remove('hidden');
-        const prevImpErr = document.getElementById('improve-error');
-        if (prevImpErr) prevImpErr.remove();
-        document.getElementById('issues-display').insertAdjacentHTML('afterend',
-            `<div class="decision-box danger" id="improve-error">
-                <div class="decision-title">Improvement unavailable</div>
-                <div>${error.message}</div>
-            </div>`);
+        _showImproveError(error.message);
     }
 }
 

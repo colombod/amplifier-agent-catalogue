@@ -1,0 +1,288 @@
+<!-- Activity Feed Component: Real-time SSE event display for LLM operations -->
+<style>
+.activity-feed {
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.75rem 0;
+    font-size: 0.78rem;
+    background: var(--bg-secondary);
+    line-height: 1.5;
+}
+
+.activity-feed:empty { display: none; }
+
+.af-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    animation: af-fade 0.25s ease;
+}
+
+.af-item + .af-item {
+    border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.af-icon {
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+
+.af-text {
+    flex: 1;
+    color: var(--text-muted);
+    word-break: break-word;
+}
+
+.af-text strong { color: var(--text-primary); font-weight: 600; }
+
+/* Running step: pulsing blue dot */
+.af-item.running .af-icon { color: var(--accent, #58a6ff); }
+.af-item.running .af-icon {
+    animation: af-pulse 1.4s ease-in-out infinite;
+}
+
+/* Done step: green check */
+.af-item.done .af-icon {
+    color: var(--success, #3fb950);
+    animation: none;
+}
+
+/* Thinking: italic, muted */
+.af-item.thinking .af-text { font-style: italic; }
+
+/* Agent sub-report */
+.af-item.agent .af-text { color: var(--text-secondary, var(--text-muted)); }
+
+/* Error: red */
+.af-item.error .af-icon,
+.af-item.error .af-text { color: var(--danger, #f85149); }
+
+/* Detail line (sub-info under a step) */
+.af-item.detail { padding-left: 1.5rem; }
+.af-item.detail .af-icon { color: var(--text-muted); font-size: 0.7rem; }
+
+@keyframes af-fade {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes af-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+</style>
+
+<script>
+/**
+ * ActivityFeed — real-time SSE event viewer.
+ *
+ * Usage:
+ *   const feed = new ActivityFeed('my-container-id');
+ *   const result = await feed.start('/api/stream/evaluate', { content: '...' });
+ *   // result is the parsed JSON from the final "result" SSE event
+ *
+ * Falls back gracefully: if the streaming endpoint returns a non-SSE error
+ * the promise rejects and the caller can fall back to the classic endpoint.
+ */
+class ActivityFeed {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        this._items = [];
+        this._resolved = false;
+    }
+
+    /* ── public ─────────────────────────────────────────────── */
+
+    clear() {
+        if (this.container) this.container.innerHTML = '';
+        this._items = [];
+        this._resolved = false;
+    }
+
+    /**
+     * POST to an SSE endpoint and stream events into the feed.
+     * Returns a promise that resolves with the "result" event payload.
+     */
+    start(url, payload) {
+        this.clear();
+        this._resolved = false;
+
+        return new Promise(async (resolve, reject) => {
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+
+                if (!resp.ok) {
+                    let detail = `HTTP ${resp.status}`;
+                    try { detail = (await resp.json()).detail || detail; } catch {}
+                    return reject(new Error(detail));
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+
+                    // SSE events are separated by double-newline
+                    const parts = buf.split('\n\n');
+                    buf = parts.pop();          // keep trailing incomplete chunk
+
+                    for (const raw of parts) {
+                        if (!raw.trim()) continue;
+                        if (raw.includes('data: [DONE]')) continue;
+
+                        let evType = 'message', evData = '';
+                        for (const line of raw.split('\n')) {
+                            if (line.startsWith('event: ')) evType = line.slice(7).trim();
+                            else if (line.startsWith('data: '))  evData += line.slice(6);
+                        }
+                        if (!evData) continue;
+                        try {
+                            this._dispatch(evType, JSON.parse(evData), resolve, reject);
+                        } catch { /* skip unparseable */ }
+                    }
+                }
+
+                // Stream ended without a result event → resolve with null
+                if (!this._resolved) resolve(null);
+
+            } catch (err) {
+                if (!this._resolved) reject(err);
+            }
+        });
+    }
+
+    /* ── internal ───────────────────────────────────────────── */
+
+    _dispatch(type, data, resolve, reject) {
+        switch (type) {
+            case 'step': {
+                const name = data.name || '';
+                const status = data.status || '';
+                const detail = data.detail || '';
+                if (status === 'running') {
+                    const el = this._add('\u25cf', this._label(name) + (detail ? ' \u2014 ' + detail : ''), 'running');
+                    el.dataset.step = name;
+                } else if (status === 'done') {
+                    this._markDone(name);
+                    if (detail) this._add('\u21b3', detail, 'detail');
+                }
+                break;
+            }
+            case 'phase': {
+                // Phase events from streaming endpoints: {phase, message}
+                // Mark any previous running phase as done, then start a new one
+                const phase = data.phase || '';
+                const msg = data.message || this._label(phase);
+                this._markLastRunningDone();
+                const el = this._add('\u25cf', msg, 'running');
+                el.dataset.step = phase;
+                break;
+            }
+            case 'thinking':
+                this._add('\ud83d\udcad', this._truncate(data.content || data.message || '', 220), 'thinking');
+                break;
+            case 'agent': {
+                const who = data.name || 'agent';
+                const agentMsg = data.message || '';
+                this._add('\ud83e\udd16', `<strong>${this._esc(who)}</strong>: ${this._esc(agentMsg)}`, 'agent');
+                break;
+            }
+            case 'progress':
+                this._add('\u00b7', data.message || '', '');
+                break;
+            case 'result':
+                this._markLastRunningDone();
+                this._add('\u2713', 'Complete', 'done');
+                this._resolved = true;
+                // Streaming endpoints nest the result: {result: {...}}
+                resolve(data.result !== undefined ? data.result : data);
+                break;
+            case 'error':
+                this._markLastRunningDone();
+                this._add('\u2717', data.message || 'An error occurred', 'error');
+                this._resolved = true;
+                reject(new Error(data.message || 'Stream error'));
+                break;
+            default:
+                if (data.message || data.content)
+                    this._add('\u00b7', data.message || data.content, '');
+        }
+    }
+
+    _add(icon, text, cls) {
+        const el = document.createElement('div');
+        el.className = 'af-item' + (cls ? ' ' + cls : '');
+        el.innerHTML = `<span class="af-icon">${icon}</span><span class="af-text">${text}</span>`;
+        this.container.appendChild(el);
+        this._items.push(el);
+        this.container.scrollTop = this.container.scrollHeight;
+        return el;
+    }
+
+    _markDone(stepName) {
+        for (const el of this._items) {
+            if (el.dataset.step === stepName && el.classList.contains('running')) {
+                el.classList.remove('running');
+                el.classList.add('done');
+                const ico = el.querySelector('.af-icon');
+                if (ico) { ico.textContent = '\u2713'; ico.style.animation = 'none'; }
+                break;
+            }
+        }
+    }
+
+    /** Mark the most recent running item as done (used for phase transitions). */
+    _markLastRunningDone() {
+        for (let i = this._items.length - 1; i >= 0; i--) {
+            const el = this._items[i];
+            if (el.classList.contains('running')) {
+                el.classList.remove('running');
+                el.classList.add('done');
+                const ico = el.querySelector('.af-icon');
+                if (ico) { ico.textContent = '\u2713'; ico.style.animation = 'none'; }
+                break;
+            }
+        }
+    }
+
+    _label(name) {
+        const map = {
+            evaluate:          'Evaluating quality',
+            catalogue_lookup:  'Searching catalogue for context',
+            improve:           'Generating improvements',
+            hyde:              'Understanding your query',
+            search:            'Searching the catalogue',
+            explain:           'Analyzing relevance',
+            parse:             'Parsing content',
+            extract:           'Extracting metadata',
+            classify:          'Classifying agent',
+            similarity:        'Checking similarity',
+            refine:            'Refining to reduce overlap',
+        };
+        return map[name] || name;
+    }
+
+    _truncate(s, n) { return s.length > n ? this._esc(s.slice(0, n)) + '\u2026' : this._esc(s); }
+
+    _esc(t) {
+        const d = document.createElement('span');
+        d.textContent = t;
+        return d.innerHTML;
+    }
+}
+</script>

@@ -106,14 +106,17 @@
 </div>
 
 <div id="search-loading" class="hidden">
-    <div class="search-loading">
+    <div class="search-loading" id="search-spinner-wrap">
         <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
         <p>Searching the catalogue...</p>
         <p class="text-muted text-sm" id="search-progress">Understanding your query</p>
     </div>
+    <div id="search-activity-feed" class="activity-feed" style="display:none;"></div>
 </div>
 
 <div id="search-results" class="hidden"></div>
+
+{% include "components/activity_feed.html" %}
 
 <script>
 let searchNarrative = null;
@@ -129,6 +132,28 @@ async function runSearch() {
     document.getElementById('search-loading').classList.remove('hidden');
     document.getElementById('search-results').classList.add('hidden');
 
+    // Try streaming endpoint first — shows real-time agent reasoning
+    const feedEl = document.getElementById('search-activity-feed');
+    const spinnerWrap = document.getElementById('search-spinner-wrap');
+
+    feedEl.style.display = 'block';
+    spinnerWrap.style.display = 'none';
+
+    const feed = new ActivityFeed('search-activity-feed');
+    try {
+        const data = await feed.start('/api/stream/search-agent', { query });
+        renderResults(data, query);
+        btn.disabled = false;
+        btn.textContent = 'Search';
+        document.getElementById('search-loading').classList.add('hidden');
+        return;
+    } catch {
+        // Streaming failed — fall through to classic endpoint
+        feedEl.style.display = 'none';
+        spinnerWrap.style.display = '';
+    }
+
+    // Fallback: classic non-streaming endpoint
     const phases = [
         'Understanding your query...',
         'Generating search profile...',

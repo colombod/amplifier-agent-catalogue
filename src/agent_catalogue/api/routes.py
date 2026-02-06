@@ -1402,7 +1402,482 @@ async def search_with_agent(
 
 
 # ===================================================================
-# SSE Streaming Endpoint
+# SSE Streaming Endpoints (real-time Amplifier events)
+# ===================================================================
+
+
+@router.post("/api/stream/evaluate")
+async def stream_evaluate(request: Request) -> StreamingResponse:
+    """SSE streaming version of evaluate - shows real-time agent reasoning.
+
+    Emits kernel events (thinking, tool calls) as they happen, then
+    sends the final result in a 'result' event.
+    """
+    body = await request.json()
+    content_str = body.get("content", "")
+    if not content_str:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    session_mgr = request.app.state.session_mgr
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _emit(event: str, data: dict[str, Any]) -> None:
+        await queue.put({"event": event, "data": data})
+
+    async def run() -> None:
+        try:
+            # Phase: evaluating
+            await _emit(
+                "phase",
+                {"phase": "evaluating", "message": "Evaluator agent analyzing quality..."},
+            )
+
+            eval_response = await session_mgr.run_one_shot_streaming(
+                "evaluator",
+                f"Evaluate the quality of this AGENTS.md file.\n\n"
+                f"Score across 5 dimensions (clarity, completeness, specificity, "
+                f"consistency, differentiation). For each: score 0-10, cite evidence, "
+                f"list issues.\n\n"
+                f"Calculate overall_score using weights: "
+                f"clarity*0.25 + completeness*0.25 + specificity*0.20 "
+                f"+ consistency*0.15 + differentiation*0.15\n\n"
+                f"Assign grade: A (9-10), B (7-8.9), C (5-6.9), D (3-4.9), F (0-2.9)\n\n"
+                f"For each issue: classify severity (critical/major/minor), "
+                f"describe problem, identify location, suggest fix.\n\n"
+                f"Return JSON with: dimensions (list), overall_score, grade, "
+                f"issues (list), strengths (list), summary.\n\n"
+                f"<content>\n{content_str}\n</content>",
+                queue,
+            )
+
+            raw = _extract_json(eval_response) or {}
+
+            # Parse into validated model with fallbacks
+            try:
+                evaluation = QualityEvaluation(**raw)
+            except Exception:
+                evaluation = QualityEvaluation(
+                    overall_score=raw.get("overall_score", 5.0),
+                    grade=raw.get("grade", "C"),
+                    summary=raw.get("summary", ""),
+                    strengths=raw.get("strengths", []),
+                )
+
+            grade = evaluation.grade
+            score = evaluation.overall_score
+            issues = raw.get("issues", [])
+            can_improve = len(issues) > 0
+
+            estimated_score = None
+            estimated_grade = None
+            if can_improve:
+                estimated_score, estimated_grade = _estimate_improved_score(raw)
+
+            # Build dimensions dict for frontend
+            dimensions: dict[str, Any] = {}
+            for dim in raw.get("dimensions", []):
+                name = dim.get("dimension", "unknown")
+                dimensions[name] = {
+                    "score": dim.get("score", 5.0),
+                    "label": ((dim.get("evidence", [""])[0])[:80] if dim.get("evidence") else ""),
+                }
+
+            token_metrics = _to_token_metrics(content_str)
+
+            await _emit(
+                "result",
+                {
+                    "result": EvaluateResponse(
+                        overall_score=score,
+                        grade=grade,
+                        grade_label=_grade_label(grade),
+                        summary=evaluation.summary or raw.get("summary", ""),
+                        dimensions=dimensions,
+                        issues=issues,
+                        strengths=evaluation.strengths or raw.get("strengths", []),
+                        can_improve=can_improve,
+                        estimated_improved_score=estimated_score,
+                        estimated_improved_grade=estimated_grade,
+                        token_metrics=token_metrics,
+                    ).model_dump()
+                },
+            )
+
+        except Exception as e:
+            logger.exception("SSE evaluate failed")
+            await _emit("error", {"message": str(e)})
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(run())
+
+    async def event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            event_type = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}))
+            yield f"event: {event_type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/api/stream/improve")
+async def stream_improve(request: Request) -> StreamingResponse:
+    """SSE streaming version of improve - shows real-time agent reasoning.
+
+    Three phases:
+    1. Finding similar agents in catalogue (embedding + DB)
+    2. Evaluator agent assessing quality (LLM)
+    3. Improver agent generating enhanced version (LLM)
+    """
+    body = await request.json()
+    content_str = body.get("content", "")
+    if not content_str:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    db_repo = request.app.state.db_repo
+    embedder = request.app.state.embedder
+    session_mgr = request.app.state.session_mgr
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _emit(event: str, data: dict[str, Any]) -> None:
+        await queue.put({"event": event, "data": data})
+
+    async def run() -> None:
+        try:
+            # --- Phase 1: catalogue lookup (non-LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "catalogue", "message": "Finding similar agents in catalogue..."},
+            )
+
+            embedding = embedder.embed(content_str)
+            similar_with_metadata = db_repo.find_similar_with_metadata(
+                embedding, threshold=0.3, limit=5
+            )
+
+            catalogue_neighbors: list[CatalogueNeighbor] = []
+            catalogue_for_llm: list[dict[str, Any]] = []
+            for agent_summary, sim_score, metadata in similar_with_metadata:
+                neighbor = CatalogueNeighbor(
+                    name=agent_summary.name,
+                    description=agent_summary.description or "",
+                    capabilities=metadata.get("capabilities", []),
+                    domains=metadata.get("domains", []),
+                    tools=metadata.get("tools", []),
+                    similarity_score=round(sim_score, 3),
+                )
+                catalogue_neighbors.append(neighbor)
+                catalogue_for_llm.append(neighbor.model_dump())
+
+            # --- Phase 2: evaluate (LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "evaluating", "message": "Evaluator agent assessing quality..."},
+            )
+
+            eval_response = await session_mgr.run_one_shot_streaming(
+                "evaluator",
+                f"Evaluate the quality of this AGENTS.md file. "
+                f"Return JSON with: overall_score, grade, issues (list with "
+                f"severity/description/suggestion), strengths, summary.\n\n"
+                f"<content>\n{content_str}\n</content>",
+                queue,
+            )
+            evaluation = _extract_json(eval_response) or {}
+
+            # Build improvement prompt with catalogue context
+            issues_summary = []
+            for issue in evaluation.get("issues", []):
+                severity = issue.get("severity", "minor")
+                desc = issue.get("description", "")
+                suggestion = issue.get("suggestion", "")
+                issues_summary.append(f"[{severity}] {desc} -> Fix: {suggestion}")
+
+            issues_text = (
+                "\n".join(issues_summary) if issues_summary else "No specific issues found."
+            )
+
+            catalogue_section = ""
+            if catalogue_for_llm:
+                neighbor_lines = []
+                for i, a in enumerate(catalogue_for_llm, 1):
+                    caps = ", ".join(a.get("capabilities", [])[:5]) or "none listed"
+                    doms = ", ".join(a.get("domains", [])[:5]) or "none listed"
+                    tls = ", ".join(a.get("tools", [])[:5]) or "none listed"
+                    neighbor_lines.append(
+                        f"{i}. **{a['name']}** \u2014 {a.get('description', 'No description')}\n"
+                        f"   Capabilities: {caps}\n"
+                        f"   Domains: {doms}\n"
+                        f"   Tools: {tls}"
+                    )
+                catalogue_section = (
+                    "\n<catalogue_context>\n"
+                    "These agents already exist in the catalogue and cover nearby "
+                    "functionality.\nThe improved version must NOT duplicate what they "
+                    "already do.\n\n"
+                    f"Existing agents:\n{chr(10).join(neighbor_lines)}\n"
+                    "</catalogue_context>\n"
+                )
+
+            original_token_count = count_tokens(content_str)
+            token_budget_rule = (
+                f"- TOKEN EFFICIENCY: The original is {original_token_count} tokens. "
+                "AGENTS.md files are loaded into LLM context at every turn, so every "
+                "token matters. Be concise and information-dense. Aim for under 1500 "
+                "tokens.\n"
+            )
+
+            catalogue_rules = ""
+            if catalogue_for_llm:
+                catalogue_rules = (
+                    "- CRITICAL: Differentiate from the catalogue agents above\n"
+                    "- Carve out a unique niche \u2014 emphasize capabilities that NONE "
+                    "of the existing agents cover\n"
+                    "- If the original is too vague, sharpen it into a specialist "
+                    "that fills a gap in the catalogue"
+                )
+
+            # --- Phase 3: improve (LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "improving", "message": "Improver agent generating enhanced version..."},
+            )
+
+            improve_prompt = (
+                f"Improve this AGENTS.md file based on the quality evaluation.\n\n"
+                f"<original_content>\n{content_str}\n</original_content>\n\n"
+                f"<evaluation_summary>\n"
+                f"Overall score: {evaluation.get('overall_score', 'N/A')}/10 "
+                f"(Grade: {evaluation.get('grade', 'N/A')})\n\n"
+                f"Issues to address:\n{issues_text}\n"
+                f"</evaluation_summary>\n"
+                f"{catalogue_section}\n"
+                f"Rules:\n"
+                f"- Preserve the agent's name, core purpose, and fundamental approach\n"
+                f"- Address each issue listed above\n"
+                f"- Add missing sections, replace vague language, add examples\n"
+                f"- Do NOT invent capabilities not implied by the original\n"
+                f"- Maintain the agent's existing voice and tone\n"
+                f"{token_budget_rule}{catalogue_rules}\n\n"
+                f"IMPORTANT: Your response must start with the first line of the "
+                f"improved AGENTS.md. Do NOT include any preamble, thinking, "
+                f"explanation, commentary, or code fences.\n"
+                f"Output ONLY raw markdown content."
+            )
+
+            improved_raw = await session_mgr.run_one_shot_streaming(
+                "improver", improve_prompt, queue
+            )
+            improved = _strip_preamble(improved_raw)
+
+            # Compute section-level diff
+            changes = _compute_diff_sections(content_str, improved)
+
+            new_score, new_grade = _estimate_improved_score(evaluation)
+            modified = sum(1 for c in changes if c["type"] in ("modified", "added"))
+            summary = f"{modified} section(s) improved"
+
+            await _emit(
+                "result",
+                {
+                    "result": ImproveResponse(
+                        improved_content=improved,
+                        original_content=content_str,
+                        changes=changes,
+                        new_score=new_score,
+                        new_grade=new_grade,
+                        improvements_summary=summary,
+                        catalogue_neighbors=catalogue_neighbors,
+                        original_token_metrics=_to_token_metrics(content_str),
+                        improved_token_metrics=_to_token_metrics(improved),
+                    ).model_dump()
+                },
+            )
+
+        except Exception as e:
+            logger.exception("SSE improve failed")
+            await _emit("error", {"message": str(e)})
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(run())
+
+    async def event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            event_type = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}))
+            yield f"event: {event_type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/api/stream/search-agent")
+async def stream_search_agent(request: Request) -> StreamingResponse:
+    """SSE streaming version of search-agent - shows real-time HyDE reasoning.
+
+    Three phases:
+    1. Generating hypothetical agent description (LLM - HyDE)
+    2. Searching catalogue with vector similarity (embedding + DB)
+    3. Analyzing relevance of results (LLM)
+    """
+    body = await request.json()
+    query = body.get("query", "")
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    logger.info("POST /api/stream/search-agent: query=%r", query[:120])
+    db_repo = request.app.state.db_repo
+    embedder = request.app.state.embedder
+    session_mgr = request.app.state.session_mgr
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _emit(event: str, data: dict[str, Any]) -> None:
+        await queue.put({"event": event, "data": data})
+
+    async def run() -> None:
+        try:
+            # --- Phase 1: HyDE generation (LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "hyde", "message": "Generating hypothetical agent description..."},
+            )
+
+            hyde_prompt = (
+                f'A user is searching an AI agent catalogue with:\n\n"{query}"\n\n'
+                f"Write a SHORT hypothetical AGENTS.md description (3-5 sentences) "
+                f"of an agent that would perfectly match this query. Write it as "
+                f"capability statements, NOT as a question. Use the same language "
+                f"patterns that real agent definitions use.\n\n"
+                f"Output ONLY the hypothetical description, nothing else."
+            )
+
+            hypothetical_doc = await session_mgr.run_one_shot_streaming(
+                "analyzer", hyde_prompt, queue
+            )
+
+            # --- Phase 2: vector search (non-LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "searching", "message": "Searching catalogue with vector similarity..."},
+            )
+
+            embedding = embedder.embed(hypothetical_doc)
+            results = db_repo.find_similar_with_metadata(
+                embedding=embedding,
+                threshold=0.3,
+                limit=10,
+            )
+
+            if not results:
+                await _emit(
+                    "result",
+                    {
+                        "result": {
+                            "results": [],
+                            "hypothetical_doc": hypothetical_doc.strip(),
+                            "total_found": 0,
+                        }
+                    },
+                )
+                return
+
+            # --- Phase 3: explain relevance (LLM) ---
+            await _emit(
+                "phase",
+                {"phase": "explaining", "message": "Analyzing relevance of results..."},
+            )
+
+            agents_text = "\n".join(f"- {s.name}: {s.description}" for s, _, _ in results)
+            explain_prompt = (
+                f'User asked: "{query}"\n\n'
+                f"These agents were found:\n{agents_text}\n\n"
+                f"For each agent, write ONE sentence explaining why it's relevant. "
+                f"If an agent is NOT relevant, mark it as irrelevant.\n\n"
+                f"Return JSON array:\n"
+                f'[{{"name": "Name", "explanation": "Why relevant", "relevant": true}}]\n\n'
+                f"Output ONLY valid JSON, no code blocks."
+            )
+
+            explain_response = await session_mgr.run_one_shot_streaming(
+                "analyzer", explain_prompt, queue
+            )
+            explanations_raw = _extract_json(explain_response)
+
+            # Handle both list and dict responses
+            if isinstance(explanations_raw, dict):
+                explanations_list: list[Any] = explanations_raw.get("results", [])
+            elif isinstance(explanations_raw, list):
+                explanations_list = explanations_raw
+            else:
+                explanations_list = []
+
+            explanations: dict[str, dict[str, Any]] = {}
+            for e in explanations_list:
+                if isinstance(e, dict):
+                    explanations[e.get("name", "")] = e
+
+            # Build response, filtering irrelevant results
+            search_results = []
+            for summary, sim_score, metadata in results:
+                exp = explanations.get(summary.name, {})
+                if exp.get("relevant") is False:
+                    continue
+                search_results.append(
+                    {
+                        "agent_id": str(summary.id),
+                        "name": summary.name,
+                        "slug": summary.slug,
+                        "description": summary.description,
+                        "relevance_score": round(sim_score, 3),
+                        "explanation": exp.get("explanation", ""),
+                        "domains": metadata.get("domains", []),
+                        "capabilities": metadata.get("capabilities", [])[:5],
+                        "token_count": summary.token_count,
+                    }
+                )
+
+            await _emit(
+                "result",
+                {
+                    "result": {
+                        "results": search_results,
+                        "hypothetical_doc": hypothetical_doc.strip(),
+                        "total_found": len(search_results),
+                    }
+                },
+            )
+
+        except Exception as e:
+            logger.exception("SSE search-agent failed")
+            await _emit("error", {"message": str(e)})
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(run())
+
+    async def event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            event_type = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}))
+            yield f"event: {event_type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ===================================================================
+# SSE Streaming Endpoint (analyze)
 # ===================================================================
 
 

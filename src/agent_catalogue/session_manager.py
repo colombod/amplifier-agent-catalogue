@@ -333,6 +333,56 @@ class SessionManager:
         finally:
             await session.cleanup()
 
+    # -- One-Shot Streaming Sessions -------------------------------------
+
+    async def run_one_shot_streaming(
+        self,
+        agent_name: str,
+        instruction: str,
+        event_queue: asyncio.Queue,
+    ) -> str:
+        """Run a one-shot session with real-time event streaming.
+
+        Same as run_one_shot but registers SSE hooks that push kernel
+        events (thinking, tool calls, content deltas) to the provided
+        queue for real-time UI feedback.
+        """
+        logger.info(
+            "One-shot streaming session: agent=%s instruction_length=%d",
+            agent_name,
+            len(instruction),
+        )
+        system_prompt = self._build_agent_prompt(agent_name)
+
+        session = await self._create_session()
+
+        context = session.coordinator.get("context")
+        await context.add_message({"role": "system", "content": system_prompt})
+
+        # Mount catalogue tools
+        tools = create_catalogue_tools(self._db_repo, self._embedder)
+        for tool in tools:
+            await session.coordinator.mount("tools", tool, name=tool.name)
+
+        # Register SSE hooks for real-time streaming
+        # Use the session's own ID as the routing key
+        sid = session.session_id
+        unregisters = self.sse_bridge.register_hooks(session, sid)
+        # Point the bridge queue to the caller's event_queue
+        self.sse_bridge._queues[sid] = event_queue
+
+        try:
+            response = await session.execute(instruction)
+            return response
+        finally:
+            for unreg in unregisters:
+                try:
+                    unreg()
+                except Exception:
+                    pass
+            self.sse_bridge.remove_queue(sid)
+            await session.cleanup()
+
     # -- Session Persistence ---------------------------------------------
 
     def _save_session(
