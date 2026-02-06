@@ -10,6 +10,7 @@
     font-size: 0.78rem;
     background: var(--bg-secondary);
     line-height: 1.5;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 }
 
 .activity-feed:empty { display: none; }
@@ -18,20 +19,21 @@
     display: flex;
     align-items: flex-start;
     gap: 0.5rem;
-    padding: 0.3rem 0;
+    padding: 0.25rem 0;
     animation: af-fade 0.25s ease;
 }
 
 .af-item + .af-item {
-    border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
 }
 
 .af-icon {
     flex-shrink: 0;
-    width: 16px;
+    width: 18px;
     text-align: center;
     font-size: 0.82rem;
     line-height: 1.5;
+    opacity: 0.7;
 }
 
 .af-text {
@@ -42,31 +44,35 @@
 
 .af-text strong { color: var(--text-primary); font-weight: 600; }
 
-/* Running step: pulsing blue dot */
-.af-item.running .af-icon { color: var(--accent, #58a6ff); }
-.af-item.running .af-icon {
+/* Phase / running step: pulsing accent */
+.af-item.phase .af-icon { color: var(--accent, #58a6ff); }
+.af-item.phase.running .af-icon {
     animation: af-pulse 1.4s ease-in-out infinite;
 }
+.af-item.phase .af-text { color: var(--accent, #58a6ff); font-weight: 600; }
 
-/* Done step: green check */
-.af-item.done .af-icon {
-    color: var(--success, #3fb950);
-    animation: none;
-}
+/* Done: green check */
+.af-item.done .af-icon { color: var(--success, #3fb950); animation: none; }
+.af-item.done .af-text { color: var(--success, #3fb950); }
 
-/* Thinking: italic, muted */
-.af-item.thinking .af-text { font-style: italic; }
+/* Tool calls */
+.af-item.tool .af-icon { color: var(--warning, #d29922); }
+.af-item.tool .af-text .tool-name { color: var(--warning, #d29922); font-weight: 600; }
 
-/* Agent sub-report */
-.af-item.agent .af-text { color: var(--text-secondary, var(--text-muted)); }
+/* Content / thinking - muted reasoning */
+.af-item.content .af-text { color: var(--text-muted); font-style: italic; }
 
-/* Error: red */
+/* LLM provider call */
+.af-item.provider .af-icon { color: var(--accent, #58a6ff); }
+.af-item.provider .af-text { color: var(--text-muted); }
+
+/* Error */
 .af-item.error .af-icon,
 .af-item.error .af-text { color: var(--danger, #f85149); }
 
-/* Detail line (sub-info under a step) */
+/* Sub-detail line */
 .af-item.detail { padding-left: 1.5rem; }
-.af-item.detail .af-icon { color: var(--text-muted); font-size: 0.7rem; }
+.af-item.detail .af-icon { font-size: 0.7rem; }
 
 @keyframes af-fade {
     from { opacity: 0; transform: translateY(-3px); }
@@ -81,15 +87,20 @@
 
 <script>
 /**
- * ActivityFeed — real-time SSE event viewer.
+ * ActivityFeed — real-time SSE event viewer for Amplifier kernel events.
  *
- * Usage:
- *   const feed = new ActivityFeed('my-container-id');
- *   const result = await feed.start('/api/stream/evaluate', { content: '...' });
- *   // result is the parsed JSON from the final "result" SSE event
+ * Handles these actual kernel events emitted by loop-streaming orchestrator:
+ *   tool:pre / tool:post           — Tool invocations
+ *   content_block:start / :end     — LLM response blocks (includes thinking)
+ *   execution:start / :end         — Agent reasoning lifecycle
+ *   provider:request / :response   — LLM API calls with model info
+ *   prompt:submit                  — Turn start
+ *   orchestrator:complete          — Turn complete
  *
- * Falls back gracefully: if the streaming endpoint returns a non-SSE error
- * the promise rejects and the caller can fall back to the classic endpoint.
+ * Plus app-level events from the streaming endpoints:
+ *   phase                          — Workflow phase transitions
+ *   result                         — Final result payload
+ *   error                          — Error message
  */
 class ActivityFeed {
     constructor(containerId) {
@@ -97,8 +108,6 @@ class ActivityFeed {
         this._items = [];
         this._resolved = false;
     }
-
-    /* ── public ─────────────────────────────────────────────── */
 
     clear() {
         if (this.container) this.container.innerHTML = '';
@@ -137,18 +146,23 @@ class ActivityFeed {
                     if (done) break;
                     buf += decoder.decode(value, { stream: true });
 
-                    // SSE events are separated by double-newline
                     const parts = buf.split('\n\n');
-                    buf = parts.pop();          // keep trailing incomplete chunk
+                    buf = parts.pop();
 
                     for (const raw of parts) {
                         if (!raw.trim()) continue;
-                        if (raw.includes('data: [DONE]')) continue;
+                        if (raw.includes('data: [DONE]')) {
+                            if (!this._resolved) {
+                                this._markLastRunningDone();
+                                resolve(null);
+                            }
+                            continue;
+                        }
 
                         let evType = 'message', evData = '';
                         for (const line of raw.split('\n')) {
                             if (line.startsWith('event: ')) evType = line.slice(7).trim();
-                            else if (line.startsWith('data: '))  evData += line.slice(6);
+                            else if (line.startsWith('data: ')) evData += line.slice(6);
                         }
                         if (!evData) continue;
                         try {
@@ -157,7 +171,6 @@ class ActivityFeed {
                     }
                 }
 
-                // Stream ended without a result event → resolve with null
                 if (!this._resolved) resolve(null);
 
             } catch (err) {
@@ -166,87 +179,148 @@ class ActivityFeed {
         });
     }
 
-    /* ── internal ───────────────────────────────────────────── */
+    /* —— event dispatch —————————————————————————————————— */
 
     _dispatch(type, data, resolve, reject) {
         switch (type) {
-            case 'step': {
-                const name = data.name || '';
-                const status = data.status || '';
-                const detail = data.detail || '';
-                if (status === 'running') {
-                    const el = this._add('\u25cf', this._label(name) + (detail ? ' \u2014 ' + detail : ''), 'running');
-                    el.dataset.step = name;
-                } else if (status === 'done') {
-                    this._markDone(name);
-                    if (detail) this._add('\u21b3', detail, 'detail');
+
+            // ── App-level phase transitions ──
+            case 'phase':
+                this._markLastRunningDone();
+                this._addPhase(data.message || data.phase || 'Processing...');
+                break;
+
+            // ── Amplifier kernel: tool calls ──
+            case 'tool:pre': {
+                const name = data.tool_name || 'tool';
+                const preview = data.input_preview || '';
+                this._add('→',
+                    `<span class="tool-name">${this._esc(name)}</span> ${this._esc(preview)}`,
+                    'tool');
+                break;
+            }
+            case 'tool:post': {
+                const name = data.tool_name || 'tool';
+                const ok = data.success;
+                const preview = data.output_preview || '';
+                this._add(ok ? '←' : '✗',
+                    `<span class="tool-name">${this._esc(name)}</span> ${ok ? preview : 'failed'}`,
+                    ok ? 'tool' : 'error');
+                break;
+            }
+            case 'tool:error':
+                this._add('✗',
+                    `<span class="tool-name">${this._esc(data.tool_name || 'tool')}</span> ${this._esc(data.error || '')}`,
+                    'error');
+                break;
+
+            // ── Amplifier kernel: content blocks (includes thinking) ──
+            case 'content_block:start': {
+                const btype = data.block_type || 'text';
+                if (btype === 'thinking') {
+                    this._add('◌', 'Reasoning...', 'content');
                 }
                 break;
             }
-            case 'phase': {
-                // Phase events from streaming endpoints: {phase, message}
-                // Mark any previous running phase as done, then start a new one
-                const phase = data.phase || '';
-                const msg = data.message || this._label(phase);
-                this._markLastRunningDone();
-                const el = this._add('\u25cf', msg, 'running');
-                el.dataset.step = phase;
+            case 'content_block:end': {
+                const btype = data.block_type || 'text';
+                const preview = data.text_preview || '';
+                const len = data.text_length || 0;
+                if (btype === 'thinking' && preview) {
+                    // Show a snippet of the thinking
+                    const lines = preview.split('\n').filter(l => l.trim());
+                    const snippet = lines.slice(0, 2).join(' ').substring(0, 180);
+                    if (snippet) {
+                        this._add('◌', this._esc(snippet) + (len > 180 ? '…' : ''), 'content');
+                    }
+                } else if (btype === 'text' && len > 0) {
+                    this._add('✎', `Response: ${len} chars`, 'detail');
+                }
+                // Show token usage if present
+                if (data.input_tokens || data.output_tokens) {
+                    this._add('·',
+                        `tokens: ${data.input_tokens || '?'} in → ${data.output_tokens || '?'} out`,
+                        'detail');
+                }
                 break;
             }
-            case 'thinking':
-                this._add('\ud83d\udcad', this._truncate(data.content || data.message || '', 220), 'thinking');
+
+            // ── Amplifier kernel: LLM provider calls ──
+            case 'provider:request':
+                this._add('⟶',
+                    `Calling <strong>${this._esc(data.provider || 'LLM')}</strong> (${this._esc(data.model || '?')})`,
+                    'provider');
                 break;
-            case 'agent': {
-                const who = data.name || 'agent';
-                const agentMsg = data.message || '';
-                this._add('\ud83e\udd16', `<strong>${this._esc(who)}</strong>: ${this._esc(agentMsg)}`, 'agent');
+            case 'provider:response':
+                if (data.input_tokens || data.output_tokens) {
+                    this._add('⟵',
+                        `${this._esc(data.model || 'LLM')}: ${data.input_tokens || '?'}→${data.output_tokens || '?'} tokens`,
+                        'provider');
+                }
                 break;
-            }
-            case 'progress':
-                this._add('\u00b7', data.message || '', '');
+
+            // ── Amplifier kernel: orchestrator lifecycle ──
+            case 'execution:start':
+                this._add('▸', 'Agent reasoning started', 'detail');
                 break;
+            case 'execution:end':
+                this._add('▪', 'Agent reasoning complete', 'detail');
+                break;
+            case 'prompt:submit':
+                if (data.prompt_length) {
+                    this._add('▸', `Prompt: ${data.prompt_length} chars`, 'detail');
+                }
+                break;
+            case 'orchestrator:complete':
+                if (data.status) {
+                    this._add('▪', `Turn complete: ${this._esc(data.status)}`, 'detail');
+                }
+                break;
+            case 'session:fork':
+                this._add('⤷', 'Sub-agent spawned', 'detail');
+                break;
+
+            // ── App-level: result / error ──
             case 'result':
                 this._markLastRunningDone();
-                this._add('\u2713', 'Complete', 'done');
+                this._add('✓', 'Complete', 'done');
                 this._resolved = true;
-                // Streaming endpoints nest the result: {result: {...}}
                 resolve(data.result !== undefined ? data.result : data);
                 break;
             case 'error':
                 this._markLastRunningDone();
-                this._add('\u2717', data.message || 'An error occurred', 'error');
+                this._add('✗', data.message || 'An error occurred', 'error');
                 this._resolved = true;
                 reject(new Error(data.message || 'Stream error'));
                 break;
+
             default:
-                if (data.message || data.content)
-                    this._add('\u00b7', data.message || data.content, '');
+                if (data.message) this._add('·', this._esc(data.message), 'detail');
         }
     }
 
-    _add(icon, text, cls) {
+    /* —— DOM helpers ————————————————————————————————————— */
+
+    _addPhase(text) {
         const el = document.createElement('div');
-        el.className = 'af-item' + (cls ? ' ' + cls : '');
-        el.innerHTML = `<span class="af-icon">${icon}</span><span class="af-text">${text}</span>`;
+        el.className = 'af-item phase running';
+        el.innerHTML = `<span class="af-icon">●</span><span class="af-text">${this._esc(text)}</span>`;
         this.container.appendChild(el);
         this._items.push(el);
         this.container.scrollTop = this.container.scrollHeight;
         return el;
     }
 
-    _markDone(stepName) {
-        for (const el of this._items) {
-            if (el.dataset.step === stepName && el.classList.contains('running')) {
-                el.classList.remove('running');
-                el.classList.add('done');
-                const ico = el.querySelector('.af-icon');
-                if (ico) { ico.textContent = '\u2713'; ico.style.animation = 'none'; }
-                break;
-            }
-        }
+    _add(icon, html, cls) {
+        const el = document.createElement('div');
+        el.className = 'af-item' + (cls ? ' ' + cls : '');
+        el.innerHTML = `<span class="af-icon">${icon}</span><span class="af-text">${html}</span>`;
+        this.container.appendChild(el);
+        this._items.push(el);
+        this.container.scrollTop = this.container.scrollHeight;
+        return el;
     }
 
-    /** Mark the most recent running item as done (used for phase transitions). */
     _markLastRunningDone() {
         for (let i = this._items.length - 1; i >= 0; i--) {
             const el = this._items[i];
@@ -254,34 +328,15 @@ class ActivityFeed {
                 el.classList.remove('running');
                 el.classList.add('done');
                 const ico = el.querySelector('.af-icon');
-                if (ico) { ico.textContent = '\u2713'; ico.style.animation = 'none'; }
+                if (ico) { ico.textContent = '✓'; ico.style.animation = 'none'; }
                 break;
             }
         }
     }
 
-    _label(name) {
-        const map = {
-            evaluate:          'Evaluating quality',
-            catalogue_lookup:  'Searching catalogue for context',
-            improve:           'Generating improvements',
-            hyde:              'Understanding your query',
-            search:            'Searching the catalogue',
-            explain:           'Analyzing relevance',
-            parse:             'Parsing content',
-            extract:           'Extracting metadata',
-            classify:          'Classifying agent',
-            similarity:        'Checking similarity',
-            refine:            'Refining to reduce overlap',
-        };
-        return map[name] || name;
-    }
-
-    _truncate(s, n) { return s.length > n ? this._esc(s.slice(0, n)) + '\u2026' : this._esc(s); }
-
     _esc(t) {
         const d = document.createElement('span');
-        d.textContent = t;
+        d.textContent = String(t);
         return d.innerHTML;
     }
 }

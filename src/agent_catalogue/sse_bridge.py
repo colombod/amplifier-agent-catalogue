@@ -1,8 +1,19 @@
 """SSE Bridge: forwards Amplifier kernel events to web clients via asyncio queues.
 
-Registers as a hook handler on AmplifierSession, capturing streaming events
-(content deltas, tool invocations, session forks) and routing them to
-per-workflow asyncio.Queue instances for consumption by FastAPI SSE endpoints.
+Registers as a hook handler on AmplifierSession, capturing real events
+emitted by the loop-streaming orchestrator through hooks.emit():
+
+  tool:pre / tool:post / tool:error    - Tool invocations
+  content_block:start / :end           - LLM response content blocks
+  execution:start / execution:end      - Orchestrator lifecycle
+  prompt:submit / orchestrator:complete - Turn lifecycle
+  provider:request / provider:response  - LLM API calls
+
+NOTE: content_block:delta and thinking:delta are NOT emitted through
+hooks.emit() by the orchestrator - they only exist in the CLI's
+streaming UI hook which reads from the raw provider stream.  We use
+content_block:end (which carries the full block including thinking
+text) to surface agent reasoning to the UI.
 """
 
 from __future__ import annotations
@@ -16,21 +27,23 @@ from amplifier_core.models import HookResult
 
 logger = logging.getLogger(__name__)
 
-# Events we forward to the web UI
-STREAMED_EVENTS = frozenset(
+# Events the loop-streaming orchestrator actually emits via hooks.emit()
+KERNEL_EVENTS = frozenset(
     [
-        "content_block:start",
-        "content_block:delta",
-        "content_block:end",
-        "thinking:delta",
-        "thinking:final",
         "tool:pre",
         "tool:post",
         "tool:error",
-        "session:fork",
+        "content_block:start",
+        "content_block:end",
+        "execution:start",
+        "execution:end",
+        "prompt:submit",
+        "orchestrator:complete",
+        "provider:request",
+        "provider:response",
         "session:start",
         "session:end",
-        "orchestrator:complete",
+        "session:fork",
     ]
 )
 
@@ -67,89 +80,192 @@ class SSEBridge:
         Returns list of unregister callables for cleanup.
         """
         unregisters = []
+        registered = []
 
         async def handler(event: str, data: dict[str, Any]) -> HookResult:
-            # Route child events to the parent workflow queue
-            target = data.get("parent_id") or data.get("session_id") or workflow_id
-            # Fall back to the workflow_id if neither matches a known queue
+            # Route to the workflow queue
+            target = data.get("parent_id") or workflow_id
             if target not in self._queues:
                 target = workflow_id
             queue = self._queues.get(target)
             if queue:
                 try:
                     serialized = _serialize_event(event, data)
-                    await queue.put(serialized)
+                    if serialized:
+                        await queue.put(serialized)
                 except Exception:
                     logger.debug("Failed to serialize event %s", event, exc_info=True)
             return HookResult(action="continue")
 
-        for evt in STREAMED_EVENTS:
+        for evt in KERNEL_EVENTS:
             try:
                 unreg = session.coordinator.hooks.register(
                     evt, handler, name=f"sse_{evt}", priority=900
                 )
                 unregisters.append(unreg)
+                registered.append(evt)
             except Exception:
                 logger.debug("Could not register hook for %s", evt, exc_info=True)
+
+        if registered:
+            logger.debug("SSE bridge registered %d hooks: %s", len(registered), registered)
+        else:
+            logger.warning("SSE bridge: no hooks registered!")
 
         return unregisters
 
 
-def _serialize_event(event: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Extract UI-relevant fields from kernel event data."""
-    result: dict[str, Any] = {"event": event}
+def _serialize_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract UI-relevant fields from kernel event data.
 
-    if event == "content_block:delta":
-        result["data"] = {
-            "text": data.get("text", ""),
-            "block_type": data.get("block_type", "text"),
+    Returns None for events that have no useful UI representation.
+    """
+
+    if event == "tool:pre":
+        tool_name = data.get("tool_name", "unknown")
+        tool_input = data.get("tool_input", {})
+        # Build a human-readable preview of what the tool is doing
+        preview = ""
+        if isinstance(tool_input, dict):
+            if "query" in tool_input:
+                preview = f'"{tool_input["query"]}"'
+            elif "text" in tool_input:
+                preview = f"({len(tool_input['text'])} chars)"
+            elif "agent_id" in tool_input:
+                preview = tool_input["agent_id"]
+            elif "slug" in tool_input:
+                preview = tool_input["slug"]
+        return {
+            "event": "tool:pre",
+            "data": {
+                "tool_name": tool_name,
+                "input_preview": preview or str(tool_input)[:200],
+            },
         }
-    elif event == "content_block:start":
-        result["data"] = {
-            "block_type": data.get("block_type", "text"),
-            "index": data.get("index"),
-        }
-    elif event == "content_block:end":
-        result["data"] = {"index": data.get("index")}
-    elif event in ("thinking:delta", "thinking:final"):
-        result["data"] = {"text": data.get("text", "")}
-    elif event == "tool:pre":
-        result["data"] = {
-            "tool_name": data.get("tool_name", ""),
-            "input_preview": str(data.get("tool_input", ""))[:500],
-        }
-    elif event == "tool:post":
+
+    if event == "tool:post":
+        tool_name = data.get("tool_name", "unknown")
         tool_result = data.get("tool_result", {})
+        success = tool_result.get("success", False) if isinstance(tool_result, dict) else False
         output = tool_result.get("output", "") if isinstance(tool_result, dict) else ""
-        result["data"] = {
-            "tool_name": data.get("tool_name", ""),
-            "success": tool_result.get("success", False) if isinstance(tool_result, dict) else False,
-            "output_preview": str(output)[:500],
-        }
-    elif event == "tool:error":
-        result["data"] = {
-            "tool_name": data.get("tool_name", ""),
-            "error": str(data.get("error", ""))[:500],
-        }
-    elif event == "session:fork":
-        result["data"] = {
-            "child_session_id": data.get("session_id", ""),
-            "parent_id": data.get("parent_id", ""),
-        }
-    elif event == "orchestrator:complete":
-        result["data"] = {
-            "turn_count": data.get("turn_count"),
-            "status": data.get("status", ""),
-        }
-    else:
-        # Generic: include safe scalar fields only
-        result["data"] = {
-            k: str(v)[:200]
-            for k, v in data.items()
-            if k not in ("messages", "request", "response") and isinstance(v, (str, int, float, bool))
+        # Summarize the output
+        summary = ""
+        if isinstance(output, list):
+            summary = f"{len(output)} results"
+        elif isinstance(output, dict):
+            if "agent_id" in output:
+                summary = f"agent {output['agent_id'][:8]}..."
+            else:
+                summary = f"{len(output)} fields"
+        elif isinstance(output, str):
+            summary = f"{len(output)} chars"
+        return {
+            "event": "tool:post",
+            "data": {
+                "tool_name": tool_name,
+                "success": success,
+                "output_preview": summary or str(output)[:200],
+            },
         }
 
-    return result
+    if event == "tool:error":
+        return {
+            "event": "tool:error",
+            "data": {
+                "tool_name": data.get("tool_name", "unknown"),
+                "error": str(data.get("error", ""))[:300],
+            },
+        }
+
+    if event == "content_block:start":
+        block_type = data.get("block_type", "text")
+        return {
+            "event": "content_block:start",
+            "data": {
+                "block_type": block_type,
+                "block_index": data.get("block_index", 0),
+                "total_blocks": data.get("total_blocks", 1),
+            },
+        }
+
+    if event == "content_block:end":
+        # This is where the real content lives - the full block
+        block = data.get("block", {})
+        block_type = block.get("type", "text") if isinstance(block, dict) else "text"
+        text = ""
+        if isinstance(block, dict):
+            # Extract text content from the block
+            text = block.get("text", "") or block.get("thinking", "") or ""
+        # Also extract usage info if present
+        usage = data.get("usage", {})
+        return {
+            "event": "content_block:end",
+            "data": {
+                "block_type": block_type,
+                "block_index": data.get("block_index", 0),
+                "text_preview": str(text)[:500] if text else "",
+                "text_length": len(str(text)) if text else 0,
+                "input_tokens": usage.get("input_tokens") if usage else None,
+                "output_tokens": usage.get("output_tokens") if usage else None,
+            },
+        }
+
+    if event == "provider:request":
+        return {
+            "event": "provider:request",
+            "data": {
+                "provider": data.get("provider", ""),
+                "model": data.get("model", ""),
+            },
+        }
+
+    if event == "provider:response":
+        usage = data.get("usage", {})
+        return {
+            "event": "provider:response",
+            "data": {
+                "provider": data.get("provider", ""),
+                "model": data.get("model", ""),
+                "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
+                "output_tokens": usage.get("output_tokens") if isinstance(usage, dict) else None,
+            },
+        }
+
+    if event == "execution:start":
+        return {
+            "event": "execution:start",
+            "data": {"message": "Agent reasoning started"},
+        }
+
+    if event == "execution:end":
+        return {
+            "event": "execution:end",
+            "data": {"message": "Agent reasoning complete"},
+        }
+
+    if event == "orchestrator:complete":
+        return {
+            "event": "orchestrator:complete",
+            "data": {
+                "status": data.get("status", ""),
+                "turn_count": data.get("turn_count"),
+            },
+        }
+
+    if event == "prompt:submit":
+        return {
+            "event": "prompt:submit",
+            "data": {"prompt_length": len(data.get("prompt", ""))},
+        }
+
+    if event == "session:fork":
+        return {
+            "event": "session:fork",
+            "data": {"child_id": data.get("session_id", "")[:12]},
+        }
+
+    # Skip session:start/session:end - not interesting for the UI
+    return None
 
 
 def format_sse(event_data: dict[str, Any]) -> str:
