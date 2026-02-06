@@ -1,28 +1,39 @@
 """SessionManager: core Amplifier integration for the Agent Catalogue web app.
 
 Manages Amplifier session lifecycle for multi-step workflows:
-- Builds the mount plan (providers, orchestrator, context) from config
+- Uses amplifier-foundation for module resolution (downloads providers,
+  orchestrator, context modules from git on first run, caches locally)
 - Creates persistent workflow sessions with catalogue tools mounted
 - Spawns specialist sub-agents from parent sessions
-- Handles session cleanup and resource management
+- Persists session transcripts and metadata for observability
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from amplifier_core import AmplifierSession
-from amplifier_core.models import ToolResult
+from amplifier_foundation.bundle import BundleModuleResolver
+from amplifier_foundation.modules.activator import ModuleActivator
 
 from agent_catalogue.config import Config
+from agent_catalogue.session_store import SessionStore
 from agent_catalogue.sse_bridge import SSEBridge
 from agent_catalogue.tools import create_catalogue_tools
 
 logger = logging.getLogger(__name__)
+
+# Git sources for Amplifier modules we depend on
+MODULE_SOURCES: dict[str, str] = {
+    "provider-azure-openai": "git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main",
+    "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
+    "loop-streaming": "git+https://github.com/microsoft/amplifier-module-loop-streaming@main",
+    "context-simple": "git+https://github.com/microsoft/amplifier-module-context-simple@main",
+}
 
 # Map agent names to their skill/knowledge file dependencies
 AGENT_SKILLS: dict[str, list[str]] = {
@@ -38,9 +49,14 @@ AGENT_SKILLS: dict[str, list[str]] = {
 class SessionManager:
     """Manages Amplifier sessions for the Agent Catalogue web app.
 
-    Provides two session patterns:
-    1. Workflow sessions: persist across multiple execute() calls, context accumulates
-    2. Sub-agent spawning: fork specialist agents from a parent workflow session
+    Uses amplifier-foundation's ModuleActivator to download and cache
+    Amplifier modules (providers, orchestrator, context) from git on first
+    startup. Subsequent startups reuse the local cache.
+
+    Provides three session patterns:
+    1. Workflow sessions: persist across multiple execute() calls
+    2. Sub-agent spawning: fork specialist agents from a parent session
+    3. One-shot sessions: create, execute once, cleanup
     """
 
     def __init__(self, config: Config) -> None:
@@ -48,21 +64,34 @@ class SessionManager:
         self._mount_plan: dict[str, Any] = {}
         self._db_repo: Any = None
         self._embedder: Any = None
+        self._resolver: BundleModuleResolver | None = None
         self._active_sessions: dict[str, AmplifierSession] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._hook_unregisters: dict[str, list] = {}
         self.sse_bridge = SSEBridge()
+        self.session_store = SessionStore()
         self._agents_dir = Path(__file__).parent.parent.parent / "agents"
         self._context_dir = Path(__file__).parent.parent.parent / "context"
         self._agent_cache: dict[str, str] = {}
+        self._cache_dir = Path.home() / ".amplifier" / "cache"
 
     async def startup(self, db_repo: Any, embedder: Any) -> None:
-        """Initialize the session manager. Called during FastAPI lifespan startup."""
+        """Initialize the session manager. Called during FastAPI lifespan startup.
+
+        Downloads and caches Amplifier modules on first run. Subsequent calls
+        reuse the local cache (~/.amplifier/cache/).
+        """
         self._db_repo = db_repo
         self._embedder = embedder
         self._mount_plan = self._build_mount_plan()
-        logger.info("SessionManager started with providers: %s",
-                     [p["module"] for p in self._mount_plan.get("providers", [])])
+
+        # Activate modules: download from git (first time) or use cache
+        self._resolver = await self._activate_modules()
+
+        logger.info(
+            "SessionManager started with providers: %s",
+            [p["module"] for p in self._mount_plan.get("providers", [])],
+        )
 
     async def shutdown(self) -> None:
         """Clean up all active sessions. Called during FastAPI lifespan shutdown."""
@@ -70,7 +99,82 @@ class SessionManager:
             await self.close_workflow(workflow_id)
         logger.info("SessionManager shut down, all sessions cleaned up")
 
-    # ── Workflow Sessions ──────────────────────────────────────────────
+    # -- Module Activation -----------------------------------------------
+
+    async def _activate_modules(self) -> BundleModuleResolver:
+        """Download and activate all Amplifier modules we need.
+
+        Uses amplifier-foundation's ModuleActivator which handles:
+        - Git shallow cloning into ~/.amplifier/cache/
+        - Cache hit detection (skips clone if already present)
+        - sys.path management so the kernel's ModuleLoader can find them
+        - pip install of module dependencies via uv
+        """
+        activator = ModuleActivator(cache_dir=self._cache_dir)
+
+        # Collect modules from the mount plan that need activation
+        modules_to_activate = []
+
+        # Orchestrator
+        orch_id = self._mount_plan["session"]["orchestrator"]
+        if orch_id in MODULE_SOURCES:
+            modules_to_activate.append({"module": orch_id, "source": MODULE_SOURCES[orch_id]})
+
+        # Context
+        ctx_id = self._mount_plan["session"]["context"]
+        if ctx_id in MODULE_SOURCES:
+            modules_to_activate.append({"module": ctx_id, "source": MODULE_SOURCES[ctx_id]})
+
+        # Providers
+        for prov in self._mount_plan.get("providers", []):
+            mod_id = prov["module"]
+            if mod_id in MODULE_SOURCES:
+                modules_to_activate.append({"module": mod_id, "source": MODULE_SOURCES[mod_id]})
+
+        logger.info(
+            "Activating %d Amplifier modules (cached in %s)",
+            len(modules_to_activate),
+            self._cache_dir,
+        )
+
+        # activate_all downloads + installs + returns {module_id: Path}
+        module_paths = await activator.activate_all(modules_to_activate)
+
+        # Build a resolver the kernel's ModuleLoader can use
+        # The activator is passed so lazy resolution works for any
+        # module not pre-activated (e.g. spawned agents requesting tools)
+        resolver = BundleModuleResolver(module_paths, activator=activator)
+
+        logger.info("Activated modules: %s", list(module_paths.keys()))
+        return resolver
+
+    # -- Session Creation (internal) -------------------------------------
+
+    async def _create_session(
+        self,
+        session_id: str | None = None,
+        parent_id: str | None = None,
+    ) -> AmplifierSession:
+        """Create and initialize an AmplifierSession with module resolver mounted.
+
+        This is the canonical session creation path. All public methods
+        (create_workflow, spawn_specialist, run_one_shot) go through here.
+        """
+        session = AmplifierSession(
+            config=self._mount_plan,
+            session_id=session_id,
+            parent_id=parent_id,
+        )
+
+        # Mount the module resolver BEFORE initialize() so the kernel's
+        # ModuleLoader can find our git-sourced modules
+        if self._resolver:
+            await session.coordinator.mount("module-source-resolver", self._resolver)
+
+        await session.initialize()
+        return session
+
+    # -- Workflow Sessions -----------------------------------------------
 
     async def create_workflow(self, workflow_id: str) -> AmplifierSession:
         """Create a persistent workflow session with catalogue tools.
@@ -78,11 +182,7 @@ class SessionManager:
         The session persists across multiple execute_step() calls.
         Context accumulates - each step sees prior conversation history.
         """
-        session = AmplifierSession(
-            config=self._mount_plan,
-            session_id=workflow_id,
-        )
-        await session.initialize()
+        session = await self._create_session(session_id=workflow_id)
 
         # Mount catalogue tools with app dependencies
         tools = create_catalogue_tools(self._db_repo, self._embedder)
@@ -110,7 +210,11 @@ class SessionManager:
             raise ValueError(f"No active workflow session: {workflow_id}")
 
         async with self._session_locks[workflow_id]:
-            return await session.execute(prompt)
+            response = await session.execute(prompt)
+
+        # Persist transcript after each step
+        self._save_session(workflow_id, session)
+        return response
 
     async def close_workflow(self, workflow_id: str) -> None:
         """Clean up a completed workflow session."""
@@ -127,7 +231,9 @@ class SessionManager:
         # Clean up SSE queue
         self.sse_bridge.remove_queue(workflow_id)
 
+        # Final save before cleanup
         if session:
+            self._save_session(workflow_id, session, final=True)
             try:
                 await session.cleanup()
             except Exception:
@@ -139,7 +245,7 @@ class SessionManager:
         """Get an active workflow session by ID."""
         return self._active_sessions.get(workflow_id)
 
-    # ── Sub-Agent Spawning ─────────────────────────────────────────────
+    # -- Sub-Agent Spawning ----------------------------------------------
 
     async def spawn_specialist(
         self,
@@ -159,11 +265,7 @@ class SessionManager:
         """
         system_prompt = self._build_agent_prompt(agent_name)
 
-        child = AmplifierSession(
-            config=self._mount_plan,
-            parent_id=parent.session_id,
-        )
-        await child.initialize()
+        child = await self._create_session(parent_id=parent.session_id)
 
         # Inject specialist system prompt
         context = child.coordinator.get("context")
@@ -174,7 +276,7 @@ class SessionManager:
         for tool in tools:
             await child.coordinator.mount("tools", tool, name=tool.name)
 
-        # Register SSE hooks (events carry parent_id → route to parent's queue)
+        # Register SSE hooks (events carry parent_id -> route to parent's queue)
         parent_workflow_id = parent.session_id
         child_unregisters = self.sse_bridge.register_hooks(child, parent_workflow_id)
 
@@ -189,7 +291,7 @@ class SessionManager:
                     pass
             await child.cleanup()
 
-    # ── One-Shot Sessions ──────────────────────────────────────────────
+    # -- One-Shot Sessions -----------------------------------------------
 
     async def run_one_shot(
         self,
@@ -203,8 +305,7 @@ class SessionManager:
         """
         system_prompt = self._build_agent_prompt(agent_name)
 
-        session = AmplifierSession(config=self._mount_plan)
-        await session.initialize()
+        session = await self._create_session()
 
         context = session.coordinator.get("context")
         await context.add_message({"role": "system", "content": system_prompt})
@@ -219,7 +320,50 @@ class SessionManager:
         finally:
             await session.cleanup()
 
-    # ── Agent Prompt Building ──────────────────────────────────────────
+    # -- Session Persistence ---------------------------------------------
+
+    def _save_session(
+        self,
+        workflow_id: str,
+        session: AmplifierSession,
+        final: bool = False,
+    ) -> None:
+        """Persist session transcript and metadata. Best-effort, never throws."""
+        try:
+            context = session.coordinator.get("context")
+            if not context:
+                return
+
+            # get_messages() returns the full uncompacted history
+            messages = (
+                asyncio.get_event_loop().run_until_complete(context.get_messages())
+                if not asyncio.get_event_loop().is_running()
+                else []
+            )
+
+            # For running event loops, try sync access if available
+            if not messages and hasattr(context, "messages"):
+                messages = context.messages
+
+            if not messages:
+                return
+
+            # Filter out system messages for the transcript
+            transcript = [m for m in messages if m.get("role") not in ("system", "developer")]
+
+            metadata = {
+                "session_id": workflow_id,
+                "created_at": datetime.now(UTC).isoformat(),
+                "turn_count": len([m for m in transcript if m.get("role") == "user"]),
+                "status": "completed" if final else "active",
+                "providers": [p["module"] for p in self._mount_plan.get("providers", [])],
+            }
+
+            self.session_store.save(workflow_id, transcript, metadata)
+        except Exception:
+            logger.debug("Failed to save session %s", workflow_id, exc_info=True)
+
+    # -- Agent Prompt Building -------------------------------------------
 
     def _build_agent_prompt(self, agent_name: str) -> str:
         """Load agent instruction + skill knowledge files into a system prompt.
@@ -245,17 +389,25 @@ class SessionManager:
 
         # Combine: instruction + knowledge
         if skill_parts:
-            prompt = instruction + "\n\n---\n\n# Reference Knowledge\n\n" + "\n\n---\n\n".join(skill_parts)
+            prompt = (
+                instruction
+                + "\n\n---\n\n# Reference Knowledge\n\n"
+                + "\n\n---\n\n".join(skill_parts)
+            )
         else:
             prompt = instruction
 
         self._agent_cache[agent_name] = prompt
         return prompt
 
-    # ── Mount Plan Building ────────────────────────────────────────────
+    # -- Mount Plan Building ---------------------------------------------
 
     def _build_mount_plan(self) -> dict[str, Any]:
-        """Build the Amplifier mount plan from app config."""
+        """Build the Amplifier mount plan from app config.
+
+        The mount plan declares which modules to load and how to configure
+        them. Module sources are in MODULE_SOURCES (resolved by _activate_modules).
+        """
         providers = []
 
         # Azure OpenAI provider (primary)
@@ -270,21 +422,25 @@ class SessionManager:
         elif self._config.azure_openai.api_key:
             azure_config["api_key"] = self._config.azure_openai.api_key
 
-        providers.append({
-            "module": "provider-azure-openai",
-            "config": azure_config,
-        })
+        providers.append(
+            {
+                "module": "provider-azure-openai",
+                "config": azure_config,
+            }
+        )
 
-        # Anthropic provider (fallback)
+        # Anthropic provider (fallback, only if configured)
         if self._config.anthropic.api_key:
-            providers.append({
-                "module": "provider-anthropic",
-                "config": {
-                    "default_model": self._config.anthropic.default_model,
-                    "api_key": self._config.anthropic.api_key,
-                    "priority": 2,
-                },
-            })
+            providers.append(
+                {
+                    "module": "provider-anthropic",
+                    "config": {
+                        "default_model": self._config.anthropic.default_model,
+                        "api_key": self._config.anthropic.api_key,
+                        "priority": 2,
+                    },
+                }
+            )
 
         return {
             "session": {
