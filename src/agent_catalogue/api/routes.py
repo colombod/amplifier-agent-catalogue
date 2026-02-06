@@ -1273,7 +1273,7 @@ async def compare_with_agent(
         f"Output ONLY valid JSON."
     )
 
-    compare_response = await session_mgr.run_one_shot("analyzer", compare_prompt)
+    compare_response = await session_mgr.run_one_shot("comparator", compare_prompt)
     comparison = _extract_json(compare_response) or {}
 
     # LLM: generate narrative
@@ -1291,7 +1291,7 @@ async def compare_with_agent(
         f"Output ONLY the narrative text, no JSON, no markdown headers."
     )
 
-    narrative = await session_mgr.run_one_shot("analyzer", narrate_prompt)
+    narrative = await session_mgr.run_one_shot("narrator", narrate_prompt)
 
     return {
         "comparison": comparison,
@@ -1328,7 +1328,7 @@ async def search_with_agent(
         f"Output ONLY the hypothetical description, nothing else."
     )
 
-    hypothetical_doc = await session_mgr.run_one_shot("analyzer", hyde_prompt)
+    hypothetical_doc = await session_mgr.run_one_shot("discovery", hyde_prompt)
 
     # Step 2: Embed the hypothetical doc and vector search
     embedding = embedder.embed(hypothetical_doc)
@@ -1357,7 +1357,7 @@ async def search_with_agent(
         f"Output ONLY valid JSON, no code blocks."
     )
 
-    explain_response = await session_mgr.run_one_shot("analyzer", explain_prompt)
+    explain_response = await session_mgr.run_one_shot("relevance", explain_prompt)
     explanations_raw = _extract_json(explain_response)
 
     # Handle both list and dict responses
@@ -1722,8 +1722,8 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
                 "phase",
                 {
                     "phase": "hyde",
-                    "message": "Analyzer agent generating hypothetical agent description...",
-                    "agent_name": "analyzer",
+                    "message": "Discovery agent generating hypothetical agent description...",
+                    "agent_name": "discovery",
                 },
             )
 
@@ -1737,7 +1737,7 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             )
 
             hypothetical_doc = await session_mgr.run_one_shot_streaming(
-                "analyzer", hyde_prompt, queue
+                "discovery", hyde_prompt, queue
             )
 
             # --- Phase 2: vector search (non-LLM) ---
@@ -1774,8 +1774,8 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
                 "phase",
                 {
                     "phase": "explaining",
-                    "message": "Analyzer agent explaining relevance of results...",
-                    "agent_name": "analyzer",
+                    "message": "Relevance agent explaining relevance of results...",
+                    "agent_name": "relevance",
                 },
             )
 
@@ -1791,7 +1791,7 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             )
 
             explain_response = await session_mgr.run_one_shot_streaming(
-                "analyzer", explain_prompt, queue
+                "relevance", explain_prompt, queue
             )
             explanations_raw = _extract_json(explain_response)
 
