@@ -224,7 +224,8 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
             "data": {
                 "block_type": block_type,
                 "block_index": data.get("block_index", 0),
-                "text_preview": str(text)[:500] if text else "",
+                "text_preview": str(text)[:3000] if text else "",  # Increased from 500 to 3000
+                "full_text": str(text) if text else "",  # Send full text for detailed viewing
                 "text_length": len(str(text)) if text else 0,
                 "input_tokens": usage.get("input_tokens") if usage else None,
                 "output_tokens": usage.get("output_tokens") if usage else None,

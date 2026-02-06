@@ -231,23 +231,101 @@ class ActivityFeed {
             case 'content_block:end': {
                 const agent = data.agent_name || '';
                 const btype = data.block_type || 'text';
-                const preview = data.text_preview || '';
+                const fullText = data.full_text || data.text_preview || '';
                 const len = data.text_length || 0;
                 const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
-                if (btype === 'thinking' && preview) {
-                    // Show a snippet of the thinking
-                    const snippet = preview.split('\n').filter(l => l.trim()).slice(0, 2).join(' ').substring(0, 200);
+                
+                if (btype === 'thinking' && fullText) {
+                    // Show reasoning summary
+                    const lines = fullText.split('\n').filter(l => l.trim());
+                    const snippet = lines.slice(0, 3).join(' ').substring(0, 300);
                     if (snippet) {
-                        this._add('◌', `${agentLabel}${this._esc(snippet)}${len > 200 ? '…' : ''}`, 'content');
+                        this._add('◌', `${agentLabel}${this._esc(snippet)}${len > 300 ? '…' : ''}`, 'content');
                     }
-                } else if (btype === 'text' && len > 0) {
-                    // Show actual response content preview instead of just char count
-                    const snippet = preview.split('\n').filter(l => l.trim()).slice(0, 3).join(' ').substring(0, 300);
-                    if (snippet) {
-                        this._add('✎', `${agentLabel}${this._esc(snippet)}${len > 300 ? '…' : ''}`, 'content');
+                } else if (btype === 'text' && fullText) {
+                    // Show the actual response content with detailed JSON extraction
+                    let displayParts = [];
+                    
+                    // Try to parse as JSON and show structured details
+                    if (fullText.trim().startsWith('{') || fullText.includes('```json')) {
+                        try {
+                            // Extract JSON from code fences if present
+                            let jsonText = fullText;
+                            const jsonMatch = fullText.match(/```json\s*([\s\S]*?)\s*```/);
+                            if (jsonMatch) {
+                                jsonText = jsonMatch[1];
+                            }
+                            
+                            const parsed = JSON.parse(jsonText.trim());
+                            
+                            // Show key summary info
+                            if (parsed.overall_score || parsed.grade) {
+                                const score = parsed.overall_score ? `${parsed.overall_score}/10` : '';
+                                const grade = parsed.grade || '';
+                                displayParts.push(`<strong>Quality: ${score} (${grade})</strong>`);
+                            }
+                            
+                            // Show summary if present
+                            if (parsed.summary) {
+                                displayParts.push(this._esc(parsed.summary.substring(0, 300)));
+                            }
+                            
+                            // Show issues with severity
+                            if (parsed.issues && Array.isArray(parsed.issues) && parsed.issues.length > 0) {
+                                const critical = parsed.issues.filter(i => i.severity === 'critical').length;
+                                const major = parsed.issues.filter(i => i.severity === 'major').length;
+                                const minor = parsed.issues.filter(i => i.severity === 'minor').length;
+                                const issueBreakdown = [
+                                    critical ? `${critical} critical` : null,
+                                    major ? `${major} major` : null,
+                                    minor ? `${minor} minor` : null
+                                ].filter(Boolean).join(', ');
+                                displayParts.push(`<span style="color: var(--warning)">Issues: ${issueBreakdown}</span>`);
+                                
+                                // Show first issue detail
+                                if (parsed.issues[0] && parsed.issues[0].description) {
+                                    displayParts.push(`• ${this._esc(parsed.issues[0].description.substring(0, 200))}`);
+                                }
+                            }
+                            
+                            // Show strengths
+                            if (parsed.strengths && Array.isArray(parsed.strengths) && parsed.strengths.length > 0) {
+                                displayParts.push(`<span style="color: var(--success)">Strengths: ${parsed.strengths.length}</span>`);
+                                if (parsed.strengths[0]) {
+                                    displayParts.push(`• ${this._esc(parsed.strengths[0].substring(0, 200))}`);
+                                }
+                            }
+                            
+                            // Show capabilities if present
+                            if (parsed.capabilities && Array.isArray(parsed.capabilities)) {
+                                displayParts.push(`Capabilities: ${parsed.capabilities.length}`);
+                            }
+                            
+                            if (displayParts.length > 0) {
+                                // Add each part as a separate line for readability
+                                displayParts.forEach((part, idx) => {
+                                    if (idx === 0) {
+                                        this._add('✎', `${agentLabel}${part}`, 'content');
+                                    } else {
+                                        this._add('·', part, 'detail');
+                                    }
+                                });
+                            } else {
+                                // Fallback to text preview
+                                const snippet = fullText.substring(0, 500);
+                                this._add('✎', `${agentLabel}${this._esc(snippet)}${len > 500 ? '…' : ''}`, 'content');
+                            }
+                        } catch {
+                            // Not valid JSON, show text preview
+                            const snippet = fullText.substring(0, 500);
+                            this._add('✎', `${agentLabel}${this._esc(snippet)}${len > 500 ? '…' : ''}`, 'content');
+                        }
+                    } else {
+                        // Plain text response
+                        const snippet = fullText.substring(0, 500);
+                        this._add('✎', `${agentLabel}${this._esc(snippet)}${len > 500 ? '…' : ''}`, 'content');
                     }
                 }
-                // Token counts removed - not useful for users
                 break;
             }
 
