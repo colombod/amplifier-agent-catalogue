@@ -276,6 +276,9 @@ def _should_show_field(field: dict[str, Any], collected: dict[str, Any]) -> bool
         if expected_str.startswith("contains:"):
             if expected_str[9:] not in actual:
                 return False
+        elif expected_str.startswith("not_contains:"):
+            if expected_str[13:] in actual:
+                return False
         elif expected_str.startswith("startswith:"):
             if not actual.startswith(expected_str[11:]):
                 return False
