@@ -683,7 +683,11 @@ async def upload_agent(
         f"Extract structured metadata from this AGENTS.md content. "
         f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
     )
+    logger.debug("Extractor response (first 500 chars): %s", extraction_response[:500])
     metadata_dict = _extract_json(extraction_response) or {}
+    logger.debug(
+        "Extracted metadata dict keys: %s", list(metadata_dict.keys()) if metadata_dict else "EMPTY"
+    )
 
     # Build ExtractedMetadata from LLM response with fallbacks
     metadata = _build_metadata(metadata_dict, document)
