@@ -241,14 +241,13 @@ class ActivityFeed {
                         this._add('◌', `${agentLabel}${this._esc(snippet)}${len > 200 ? '…' : ''}`, 'content');
                     }
                 } else if (btype === 'text' && len > 0) {
-                    this._add('✎', `${agentLabel}response (${len} chars)`, 'detail');
+                    // Show actual response content preview instead of just char count
+                    const snippet = preview.split('\n').filter(l => l.trim()).slice(0, 3).join(' ').substring(0, 300);
+                    if (snippet) {
+                        this._add('✎', `${agentLabel}${this._esc(snippet)}${len > 300 ? '…' : ''}`, 'content');
+                    }
                 }
-                // Show token usage if present
-                if (data.input_tokens || data.output_tokens) {
-                    this._add('·',
-                        `tokens: ${data.input_tokens || '?'} in → ${data.output_tokens || '?'} out`,
-                        'detail');
-                }
+                // Token counts removed - not useful for users
                 break;
             }
 
@@ -285,9 +284,7 @@ class ActivityFeed {
                 break;
             }
             case 'prompt:submit':
-                if (data.prompt_length) {
-                    this._add('▸', `Prompt: ${data.prompt_length} chars`, 'detail');
-                }
+                // Prompt length removed - not useful for users
                 break;
             case 'orchestrator:complete':
                 if (data.status) {

@@ -167,34 +167,50 @@ class GetAgentContentTool:
         }
 
     async def execute(self, input: dict) -> ToolResult:
+        agent_id_raw = input.get("agent_id", "")
+        logger.info("get_agent_content called with agent_id=%s", agent_id_raw)
+
         try:
-            agent_uuid = UUID(input["agent_id"])
-        except ValueError:
+            agent_uuid = UUID(agent_id_raw)
+        except ValueError as e:
+            logger.warning("get_agent_content: invalid UUID format: %s", agent_id_raw)
             return ToolResult(
                 success=False,
-                error={"message": f"Invalid UUID: {input['agent_id']}"},
+                error={"message": f"Invalid UUID format: {agent_id_raw}"},
             )
 
         try:
             agent = self._db.get_agent(agent_uuid)
             if not agent:
+                logger.warning("get_agent_content: agent not found: %s", agent_uuid)
                 return ToolResult(
                     success=False,
-                    error={"message": f"Agent not found: {input['agent_id']}"},
+                    error={"message": f"Agent not found with ID: {agent_id_raw}"},
                 )
 
             version_num = input.get("version")
             if version_num is not None:
                 version = self._db.get_version_by_number(agent_uuid, version_num)
+                logger.info(
+                    "get_agent_content: fetching version %d for agent %s", version_num, agent.name
+                )
             else:
                 version = self._db.get_latest_version(agent_uuid)
+                logger.info("get_agent_content: fetching latest version for agent %s", agent.name)
 
             if not version:
+                logger.warning("get_agent_content: no version found for agent %s", agent.name)
                 return ToolResult(
                     success=False,
-                    error={"message": "Version not found"},
+                    error={"message": f"No version found for agent '{agent.name}'"},
                 )
 
+            logger.info(
+                "get_agent_content: success - returning %d chars for %s v%d",
+                len(version.raw_content),
+                agent.name,
+                version.version_number,
+            )
             return ToolResult(
                 output={
                     "agent_id": str(agent.id),
@@ -205,7 +221,7 @@ class GetAgentContentTool:
                 }
             )
         except Exception as e:
-            logger.exception("get_agent_content failed for agent_id=%s", input.get("agent_id"))
+            logger.exception("get_agent_content failed for agent_id=%s", agent_id_raw)
             return ToolResult(
                 success=False,
                 error={"message": f"get_agent_content error: {type(e).__name__}: {e}"},
