@@ -21,7 +21,6 @@ console = Console()
 def cli(ctx: click.Context) -> None:
     """Agent Catalogue - Catalogue, analyze, and discover AI agent definitions."""
     if ctx.invoked_subcommand is None:
-        # Default to serve
         ctx.invoke(serve)
 
 
@@ -74,7 +73,6 @@ def config() -> None:
     console.print(Panel("[bold]Agent Catalogue Configuration[/bold]"))
     console.print()
 
-    # Settings file locations
     console.print("[bold]Settings files:[/bold]")
     for label, path in [
         ("Global", get_global_settings_path()),
@@ -89,7 +87,6 @@ def config() -> None:
     console.print(f"  Keys:  {keys_path} ({exists})")
     console.print()
 
-    # Providers
     console.print("[bold]Providers:[/bold]")
     if cfg.providers:
         for p in cfg.providers:
@@ -99,7 +96,6 @@ def config() -> None:
         console.print("  [yellow]None configured[/yellow]")
     console.print()
 
-    # Embeddings
     console.print("[bold]Embeddings:[/bold]")
     console.print(f"  Endpoint:   {cfg.embeddings.endpoint or '[dim]not set[/dim]'}")
     console.print(f"  Deployment: {cfg.embeddings.deployment}")
@@ -108,7 +104,6 @@ def config() -> None:
     console.print(f"  Auth:       {cfg.embeddings.auth}")
     console.print()
 
-    # Storage & Server
     console.print("[bold]Storage:[/bold]")
     console.print(f"  Database: {cfg.storage.db_path}")
     console.print()
@@ -122,8 +117,9 @@ def init(yes: bool) -> None:
     """Set up Agent Catalogue configuration.
 
     Walks through provider selection, embedding configuration, and
-    server settings. Saves to ~/.agent-catalogue/settings.yaml and
-    API keys to ~/.agent-catalogue/keys.env.
+    server settings. Press Enter on any prompt to keep the current value.
+    Saves to ~/.agent-catalogue/settings.yaml and API keys to
+    ~/.agent-catalogue/keys.env.
     """
     from agent_catalogue.key_manager import KeyManager
     from agent_catalogue.paths import get_global_settings_path
@@ -135,7 +131,8 @@ def init(yes: bool) -> None:
             "This wizard will configure:\n"
             "  1. LLM provider (for agent tasks)\n"
             "  2. Embedding provider (for vector search)\n"
-            "  3. Server settings",
+            "  3. Server settings\n\n"
+            "[dim]Press Enter on any prompt to keep the current value.[/dim]",
             title="Welcome",
         )
     )
@@ -144,19 +141,15 @@ def init(yes: bool) -> None:
     key_mgr = KeyManager()
     key_mgr.load_keys()
 
-    # Start with current settings or defaults
-    if get_global_settings_path().exists():
-        settings = load_settings()
-        console.print("[dim]Existing configuration found. Values shown as defaults.[/dim]\n")
-    else:
-        settings = {
-            "providers": [],
-            "embeddings": {},
-            "storage": {},
-            "server": {},
-        }
+    # Load existing settings (or defaults) so we can show current values
+    settings = load_settings()
+    is_reconfigure = get_global_settings_path().exists()
+    if is_reconfigure:
+        console.print(
+            "[dim]Existing configuration found. Current values shown as defaults.[/dim]\n"
+        )
 
-    # ── Step 1: LLM Provider ──────────────────────────────────────
+    # -- Step 1: LLM Provider ----------------------------------------
 
     console.print("[bold]Step 1: LLM Provider[/bold]")
     console.print("Choose the provider for agent tasks (extraction, evaluation, etc.)\n")
@@ -167,35 +160,62 @@ def init(yes: bool) -> None:
         "3": ("provider-openai", "OpenAI"),
     }
 
+    # Detect current provider to set as default
+    current_provider_num = "1"
+    current_providers = settings.get("providers", [])
+    if current_providers:
+        active = current_providers[0]
+        active_module = active.get("module", "")
+        for num, (mod, _) in providers_menu.items():
+            if mod == active_module:
+                current_provider_num = num
+                break
+
     for num, (_, label) in providers_menu.items():
-        console.print(f"  [{num}] {label}")
+        marker = (
+            " [green](current)[/green]" if num == current_provider_num and is_reconfigure else ""
+        )
+        console.print(f"  [{num}] {label}{marker}")
     console.print()
 
     if yes:
-        # Auto-detect from env vars
         import os
 
-        if os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get("AZURE_OPENAI_API_KEY"):
-            choice = "1"
+        if is_reconfigure:
+            # Re-running init: keep existing provider
+            choice = current_provider_num
+            console.print(f"[dim]Keeping current: {providers_menu[choice][1]}[/dim]")
         elif os.environ.get("ANTHROPIC_API_KEY"):
             choice = "2"
+        elif os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get("AZURE_OPENAI_API_KEY"):
+            choice = "1"
         elif os.environ.get("OPENAI_API_KEY"):
             choice = "3"
         else:
             choice = "1"
-        console.print(f"[dim]Auto-detected: {providers_menu[choice][1]}[/dim]")
+            console.print(f"[dim]Auto-detected: {providers_menu[choice][1]}[/dim]")
     else:
-        choice = Prompt.ask("Select provider", choices=["1", "2", "3"], default="1")
+        choice = Prompt.ask(
+            "Select provider", choices=["1", "2", "3"], default=current_provider_num
+        )
 
-    provider_module, provider_label = providers_menu[choice]
-    provider_config: dict[str, Any] = {"priority": 1}
+    provider_module, _ = providers_menu[choice]
+
+    # Get existing config for this provider (if re-configuring the same one)
+    existing_provider_config: dict[str, Any] = {}
+    for p in current_providers:
+        if p.get("module") == provider_module:
+            existing_provider_config = p.get("config", {})
+            break
 
     if provider_module == "provider-azure-openai":
-        provider_config = _configure_azure_openai(key_mgr, yes)
+        provider_config = _configure_azure_openai(key_mgr, yes, existing_provider_config)
     elif provider_module == "provider-anthropic":
-        provider_config = _configure_anthropic(key_mgr, yes)
+        provider_config = _configure_anthropic(key_mgr, yes, existing_provider_config)
     elif provider_module == "provider-openai":
-        provider_config = _configure_openai(key_mgr, yes)
+        provider_config = _configure_openai(key_mgr, yes, existing_provider_config)
+    else:
+        provider_config = {}
 
     provider_config["priority"] = 1
     settings["providers"] = [{"module": provider_module, "config": provider_config}]
@@ -203,30 +223,52 @@ def init(yes: bool) -> None:
     # Ask about fallback provider
     if not yes:
         console.print()
-        add_fallback = Confirm.ask("Add a fallback provider?", default=False)
+        # Check if there's an existing fallback
+        has_existing_fallback = len(current_providers) > 1
+        add_fallback = Confirm.ask("Add a fallback provider?", default=has_existing_fallback)
         if add_fallback:
             console.print()
             remaining = {k: v for k, v in providers_menu.items() if v[0] != provider_module}
+
+            # Detect current fallback default
+            fb_default = list(remaining.keys())[0]
+            if has_existing_fallback:
+                fb_module_existing = current_providers[1].get("module", "")
+                for num, (mod, _) in remaining.items():
+                    if mod == fb_module_existing:
+                        fb_default = num
+                        break
+
             for num, (_, label) in remaining.items():
                 console.print(f"  [{num}] {label}")
             console.print()
-            fb_choice = Prompt.ask("Select fallback", choices=list(remaining.keys()))
+            fb_choice = Prompt.ask(
+                "Select fallback", choices=list(remaining.keys()), default=fb_default
+            )
             fb_module, _ = remaining[fb_choice]
-            fb_config: dict[str, Any] = {}
+
+            # Get existing config for fallback provider
+            existing_fb_config: dict[str, Any] = {}
+            for p in current_providers:
+                if p.get("module") == fb_module:
+                    existing_fb_config = p.get("config", {})
+                    break
 
             if fb_module == "provider-azure-openai":
-                fb_config = _configure_azure_openai(key_mgr, yes)
+                fb_config = _configure_azure_openai(key_mgr, yes, existing_fb_config)
             elif fb_module == "provider-anthropic":
-                fb_config = _configure_anthropic(key_mgr, yes)
+                fb_config = _configure_anthropic(key_mgr, yes, existing_fb_config)
             elif fb_module == "provider-openai":
-                fb_config = _configure_openai(key_mgr, yes)
+                fb_config = _configure_openai(key_mgr, yes, existing_fb_config)
+            else:
+                fb_config = {}
 
             fb_config["priority"] = 2
             settings["providers"].append({"module": fb_module, "config": fb_config})
 
     console.print()
 
-    # ── Step 2: Embeddings ────────────────────────────────────────
+    # -- Step 2: Embeddings ------------------------------------------
 
     console.print("[bold]Step 2: Embedding Configuration[/bold]")
     console.print("Configure the embedding model for vector search.\n")
@@ -236,10 +278,14 @@ def init(yes: bool) -> None:
     if yes:
         import os
 
-        emb_endpoint = os.environ.get(
+        emb_endpoint = emb.get("endpoint") or os.environ.get(
             "AZURE_OPENAI_ENDPOINT",
             provider_config.get("azure_endpoint", ""),
         )
+        emb_deployment = emb.get("deployment", "text-embedding-3-large")
+        emb_model = emb.get("model", "text-embedding-3-large")
+        emb_dims = emb.get("dimensions", 3072)
+        emb_auth = emb.get("auth", "rbac")
     else:
         default_endpoint = emb.get(
             "endpoint",
@@ -249,13 +295,6 @@ def init(yes: bool) -> None:
             "Azure OpenAI endpoint for embeddings",
             default=default_endpoint or "",
         )
-
-    if yes:
-        emb_deployment = emb.get("deployment", "text-embedding-3-large")
-        emb_model = emb.get("model", "text-embedding-3-large")
-        emb_dims = emb.get("dimensions", 3072)
-        emb_auth = "rbac" if not os.environ.get("AZURE_OPENAI_API_KEY") else "api_key"
-    else:
         emb_deployment = Prompt.ask(
             "Embedding deployment name",
             default=emb.get("deployment", "text-embedding-3-large"),
@@ -275,9 +314,21 @@ def init(yes: bool) -> None:
         )
 
         if emb_auth == "api_key":
-            emb_api_key = Prompt.ask("Azure OpenAI API key for embeddings", password=True)
-            if emb_api_key:
-                key_mgr.save_key("AZURE_OPENAI_EMBEDDING_API_KEY", emb_api_key)
+            has_emb_key = key_mgr.has_key("AZURE_OPENAI_EMBEDDING_API_KEY")
+            if has_emb_key:
+                change = Confirm.ask(
+                    "Embedding API key is already configured. Change it?", default=False
+                )
+                if change:
+                    emb_api_key = Prompt.ask(
+                        "New Azure OpenAI API key for embeddings", password=True
+                    )
+                    if emb_api_key:
+                        key_mgr.save_key("AZURE_OPENAI_EMBEDDING_API_KEY", emb_api_key)
+            else:
+                emb_api_key = Prompt.ask("Azure OpenAI API key for embeddings", password=True)
+                if emb_api_key:
+                    key_mgr.save_key("AZURE_OPENAI_EMBEDDING_API_KEY", emb_api_key)
 
     settings["embeddings"] = {
         "endpoint": emb_endpoint,
@@ -292,7 +343,7 @@ def init(yes: bool) -> None:
 
     console.print()
 
-    # ── Step 3: Server Settings ───────────────────────────────────
+    # -- Step 3: Server Settings -------------------------------------
 
     console.print("[bold]Step 3: Server Settings[/bold]")
 
@@ -310,14 +361,14 @@ def init(yes: bool) -> None:
             "debug": Confirm.ask("Enable debug mode?", default=srv.get("debug", False)),
         }
 
-    # Storage
+    # Storage - retain existing or use default
     settings["storage"] = {
         "db_path": str(settings.get("storage", {}).get("db_path", "./data/catalogue.duckdb")),
     }
 
     console.print()
 
-    # ── Save ──────────────────────────────────────────────────────
+    # -- Save --------------------------------------------------------
 
     saved_path = save_settings(settings, scope="global")
 
@@ -332,35 +383,59 @@ def init(yes: bool) -> None:
     )
 
 
-# ── Provider Configuration Helpers ────────────────────────────────────
+# -- Provider Configuration Helpers ----------------------------------------
 
 
-def _configure_azure_openai(key_mgr: KeyManager, non_interactive: bool) -> dict[str, Any]:
-    """Configure Azure OpenAI provider."""
+def _configure_azure_openai(
+    key_mgr: KeyManager,
+    non_interactive: bool,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Configure Azure OpenAI provider. Existing values shown as defaults."""
     import os
 
+    existing = existing or {}
+
     if non_interactive:
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        endpoint = existing.get("azure_endpoint") or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
         api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
-        use_rbac = not api_key
-        model = os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o")
+        use_rbac = existing.get("use_default_credential", not api_key)
+        model = existing.get("default_model") or os.environ.get(
+            "AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o"
+        )
     else:
-        endpoint = Prompt.ask("Azure OpenAI endpoint")
+        endpoint = Prompt.ask(
+            "Azure OpenAI endpoint",
+            default=existing.get("azure_endpoint", ""),
+        )
+        current_auth = "rbac" if existing.get("use_default_credential") else "api_key"
+        if not existing:
+            current_auth = "rbac"
         auth_choice = Prompt.ask(
-            "Authentication method", choices=["rbac", "api_key"], default="rbac"
+            "Authentication method", choices=["rbac", "api_key"], default=current_auth
         )
         use_rbac = auth_choice == "rbac"
         if not use_rbac:
-            api_key = Prompt.ask("Azure OpenAI API key", password=True)
-            key_mgr.save_key("AZURE_OPENAI_API_KEY", api_key)
-        else:
-            api_key = ""
-        model = Prompt.ask("Chat deployment name", default="gpt-4o")
+            has_key = key_mgr.has_key("AZURE_OPENAI_API_KEY")
+            if has_key:
+                change = Confirm.ask("API key already configured. Change it?", default=False)
+                if change:
+                    api_key = Prompt.ask("New Azure OpenAI API key", password=True)
+                    if api_key:
+                        key_mgr.save_key("AZURE_OPENAI_API_KEY", api_key)
+            else:
+                api_key = Prompt.ask("Azure OpenAI API key", password=True)
+                if api_key:
+                    key_mgr.save_key("AZURE_OPENAI_API_KEY", api_key)
+        model = Prompt.ask(
+            "Chat deployment name",
+            default=existing.get("default_model", "gpt-4o"),
+        )
 
     config: dict[str, Any] = {
         "azure_endpoint": endpoint,
         "default_model": model,
-        "api_version": "2024-12-01-preview",
+        "api_version": existing.get("api_version", "2024-12-01-preview"),
     }
     if use_rbac:
         config["use_default_credential"] = True
@@ -370,18 +445,38 @@ def _configure_azure_openai(key_mgr: KeyManager, non_interactive: bool) -> dict[
     return config
 
 
-def _configure_anthropic(key_mgr: KeyManager, non_interactive: bool) -> dict[str, Any]:
-    """Configure Anthropic provider."""
+def _configure_anthropic(
+    key_mgr: KeyManager,
+    non_interactive: bool,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Configure Anthropic provider. Existing values shown as defaults."""
     import os
+
+    existing = existing or {}
 
     if non_interactive:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        model = "claude-sonnet-4-20250514"
+        model = existing.get("default_model", "claude-sonnet-4-20250514")
     else:
-        api_key = Prompt.ask("Anthropic API key", password=True)
-        model = Prompt.ask("Model name", default="claude-sonnet-4-20250514")
+        has_key = key_mgr.has_key("ANTHROPIC_API_KEY")
+        if has_key:
+            console.print("  [dim]Anthropic API key: configured[/dim]")
+            change = Confirm.ask("  Change API key?", default=False)
+            if change:
+                api_key = Prompt.ask("  New Anthropic API key", password=True)
+                if api_key:
+                    key_mgr.save_key("ANTHROPIC_API_KEY", api_key)
+        else:
+            api_key = Prompt.ask("Anthropic API key", password=True)
+            if api_key:
+                key_mgr.save_key("ANTHROPIC_API_KEY", api_key)
+        model = Prompt.ask(
+            "Model name",
+            default=existing.get("default_model", "claude-sonnet-4-20250514"),
+        )
 
-    if api_key:
+    if non_interactive and api_key:
         key_mgr.save_key("ANTHROPIC_API_KEY", api_key)
 
     return {
@@ -390,18 +485,38 @@ def _configure_anthropic(key_mgr: KeyManager, non_interactive: bool) -> dict[str
     }
 
 
-def _configure_openai(key_mgr: KeyManager, non_interactive: bool) -> dict[str, Any]:
-    """Configure OpenAI provider."""
+def _configure_openai(
+    key_mgr: KeyManager,
+    non_interactive: bool,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Configure OpenAI provider. Existing values shown as defaults."""
     import os
+
+    existing = existing or {}
 
     if non_interactive:
         api_key = os.environ.get("OPENAI_API_KEY", "")
-        model = "gpt-4o"
+        model = existing.get("default_model", "gpt-4o")
     else:
-        api_key = Prompt.ask("OpenAI API key", password=True)
-        model = Prompt.ask("Model name", default="gpt-4o")
+        has_key = key_mgr.has_key("OPENAI_API_KEY")
+        if has_key:
+            console.print("  [dim]OpenAI API key: configured[/dim]")
+            change = Confirm.ask("  Change API key?", default=False)
+            if change:
+                api_key = Prompt.ask("  New OpenAI API key", password=True)
+                if api_key:
+                    key_mgr.save_key("OPENAI_API_KEY", api_key)
+        else:
+            api_key = Prompt.ask("OpenAI API key", password=True)
+            if api_key:
+                key_mgr.save_key("OPENAI_API_KEY", api_key)
+        model = Prompt.ask(
+            "Model name",
+            default=existing.get("default_model", "gpt-4o"),
+        )
 
-    if api_key:
+    if non_interactive and api_key:
         key_mgr.save_key("OPENAI_API_KEY", api_key)
 
     return {
