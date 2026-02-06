@@ -68,16 +68,22 @@ class AzureOpenAIConfig(BaseSettings):
         description="Deployment name for embedding model",
     )
 
-    # Authentication - API key (optional, uses DefaultAzureCredential if not set)
+    # Authentication
     api_key: str | None = Field(
         default=None,
         description="Azure OpenAI API key. If not set, uses DefaultAzureCredential (RBAC)",
+    )
+    use_rbac: bool = Field(
+        default=False,
+        description="Use RBAC via DefaultAzureCredential instead of API key",
     )
 
     @property
     def auth_type(self) -> Literal["api_key", "rbac"]:
         """Return the authentication type being used."""
-        return "api_key" if self.api_key else "rbac"
+        if self.use_rbac or not self.api_key:
+            return "rbac"
+        return "api_key"
 
 
 class AnthropicConfig(BaseSettings):
