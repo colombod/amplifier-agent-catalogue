@@ -205,8 +205,11 @@ class GetAgentContentTool:
                 }
             )
         except Exception as e:
-            logger.exception("get_agent_content failed")
-            return ToolResult(success=False, error={"message": str(e)})
+            logger.exception("get_agent_content failed for agent_id=%s", input.get("agent_id"))
+            return ToolResult(
+                success=False,
+                error={"message": f"get_agent_content error: {type(e).__name__}: {e}"},
+            )
 
 
 class StoreAgentTool:
