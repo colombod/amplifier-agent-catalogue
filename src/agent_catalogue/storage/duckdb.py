@@ -35,6 +35,11 @@ class DuckDBRepository:
         """
         self.config = config or get_config().storage
         self._ensure_db_directory()
+        # Single persistent connection - DuckDB does not support concurrent
+        # connections to the same file.  The Amplifier orchestrator runs tools
+        # in parallel (asyncio.gather), so every tool call that touches the DB
+        # must go through this single connection.
+        self._conn = duckdb.connect(str(self.config.db_path))
         self._init_schema()
 
     def _ensure_db_directory(self) -> None:
@@ -43,12 +48,13 @@ class DuckDBRepository:
 
     @contextmanager
     def _connection(self) -> Iterator[duckdb.DuckDBPyConnection]:
-        """Get a database connection."""
-        conn = duckdb.connect(str(self.config.db_path))
-        try:
-            yield conn
-        finally:
-            conn.close()
+        """Get the database connection.
+
+        Uses a single persistent connection instead of opening a new one
+        per call.  DuckDB holds a write-lock on the file, so concurrent
+        duckdb.connect() calls from parallel tool execution would fail.
+        """
+        yield self._conn
 
     def _init_schema(self) -> None:
         """Initialize database schema."""
