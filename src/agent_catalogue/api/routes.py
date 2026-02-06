@@ -1429,7 +1429,11 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
             # Phase: evaluating
             await _emit(
                 "phase",
-                {"phase": "evaluating", "message": "Evaluator agent analyzing quality..."},
+                {
+                    "phase": "evaluating",
+                    "message": "Evaluator agent analyzing quality...",
+                    "agent_name": "evaluator",
+                },
             )
 
             eval_response = await session_mgr.run_one_shot_streaming(
@@ -1551,7 +1555,10 @@ async def stream_improve(request: Request) -> StreamingResponse:
             # --- Phase 1: catalogue lookup (non-LLM) ---
             await _emit(
                 "phase",
-                {"phase": "catalogue", "message": "Finding similar agents in catalogue..."},
+                {
+                    "phase": "catalogue",
+                    "message": "Finding similar agents in catalogue...",
+                },
             )
 
             embedding = embedder.embed(content_str)
@@ -1560,7 +1567,6 @@ async def stream_improve(request: Request) -> StreamingResponse:
             )
 
             catalogue_neighbors: list[CatalogueNeighbor] = []
-            catalogue_for_llm: list[dict[str, Any]] = []
             for agent_summary, sim_score, metadata in similar_with_metadata:
                 neighbor = CatalogueNeighbor(
                     name=agent_summary.name,
@@ -1571,12 +1577,15 @@ async def stream_improve(request: Request) -> StreamingResponse:
                     similarity_score=round(sim_score, 3),
                 )
                 catalogue_neighbors.append(neighbor)
-                catalogue_for_llm.append(neighbor.model_dump())
 
             # --- Phase 2: evaluate (LLM) ---
             await _emit(
                 "phase",
-                {"phase": "evaluating", "message": "Evaluator agent assessing quality..."},
+                {
+                    "phase": "evaluating",
+                    "message": "Evaluator agent assessing quality...",
+                    "agent_name": "evaluator",
+                },
             )
 
             eval_response = await session_mgr.run_one_shot_streaming(
@@ -1601,72 +1610,36 @@ async def stream_improve(request: Request) -> StreamingResponse:
                 "\n".join(issues_summary) if issues_summary else "No specific issues found."
             )
 
-            catalogue_section = ""
-            if catalogue_for_llm:
-                neighbor_lines = []
-                for i, a in enumerate(catalogue_for_llm, 1):
-                    caps = ", ".join(a.get("capabilities", [])[:5]) or "none listed"
-                    doms = ", ".join(a.get("domains", [])[:5]) or "none listed"
-                    tls = ", ".join(a.get("tools", [])[:5]) or "none listed"
-                    neighbor_lines.append(
-                        f"{i}. **{a['name']}** \u2014 {a.get('description', 'No description')}\n"
-                        f"   Capabilities: {caps}\n"
-                        f"   Domains: {doms}\n"
-                        f"   Tools: {tls}"
-                    )
-                catalogue_section = (
-                    "\n<catalogue_context>\n"
-                    "These agents already exist in the catalogue and cover nearby "
-                    "functionality.\nThe improved version must NOT duplicate what they "
-                    "already do.\n\n"
-                    f"Existing agents:\n{chr(10).join(neighbor_lines)}\n"
-                    "</catalogue_context>\n"
-                )
-
             original_token_count = count_tokens(content_str)
-            token_budget_rule = (
-                f"- TOKEN EFFICIENCY: The original is {original_token_count} tokens. "
-                "AGENTS.md files are loaded into LLM context at every turn, so every "
-                "token matters. Be concise and information-dense. Aim for under 1500 "
-                "tokens.\n"
-            )
 
-            catalogue_rules = ""
-            if catalogue_for_llm:
-                catalogue_rules = (
-                    "- CRITICAL: Differentiate from the catalogue agents above\n"
-                    "- Carve out a unique niche \u2014 emphasize capabilities that NONE "
-                    "of the existing agents cover\n"
-                    "- If the original is too vague, sharpen it into a specialist "
-                    "that fills a gap in the catalogue"
-                )
-
-            # --- Phase 3: improve (LLM) ---
+            # --- Phase 3: improve (LLM with tools) ---
             await _emit(
                 "phase",
-                {"phase": "improving", "message": "Improver agent generating enhanced version..."},
+                {
+                    "phase": "improving",
+                    "message": "Improver agent researching catalogue and improving...",
+                    "agent_name": "improver",
+                },
             )
 
             improve_prompt = (
-                f"Improve this AGENTS.md file based on the quality evaluation.\n\n"
+                f"Improve this AGENTS.md definition based on the quality evaluation below.\n\n"
                 f"<original_content>\n{content_str}\n</original_content>\n\n"
                 f"<evaluation_summary>\n"
                 f"Overall score: {evaluation.get('overall_score', 'N/A')}/10 "
                 f"(Grade: {evaluation.get('grade', 'N/A')})\n\n"
                 f"Issues to address:\n{issues_text}\n"
-                f"</evaluation_summary>\n"
-                f"{catalogue_section}\n"
-                f"Rules:\n"
-                f"- Preserve the agent's name, core purpose, and fundamental approach\n"
-                f"- Address each issue listed above\n"
-                f"- Add missing sections, replace vague language, add examples\n"
-                f"- Do NOT invent capabilities not implied by the original\n"
-                f"- Maintain the agent's existing voice and tone\n"
-                f"{token_budget_rule}{catalogue_rules}\n\n"
-                f"IMPORTANT: Your response must start with the first line of the "
-                f"improved AGENTS.md. Do NOT include any preamble, thinking, "
-                f"explanation, commentary, or code fences.\n"
-                f"Output ONLY raw markdown content."
+                f"</evaluation_summary>\n\n"
+                f"You have access to tools:\n"
+                f"- search_similar: Search the agent catalogue for similar agents\n"
+                f"- get_agent_content: Read the full AGENTS.md of a specific agent\n\n"
+                f"Use these tools to understand the landscape of existing agents, "
+                f"then generate an improved version that:\n"
+                f"1. Fixes all identified quality issues\n"
+                f"2. Differentiates from similar agents you find in the catalogue\n"
+                f"3. Carves out a unique niche\n\n"
+                f"Original token count: {original_token_count}. Aim for under 1500 tokens.\n\n"
+                f"Output ONLY the improved raw markdown. No preamble, no code fences."
             )
 
             improved_raw = await session_mgr.run_one_shot_streaming(
@@ -1747,7 +1720,11 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             # --- Phase 1: HyDE generation (LLM) ---
             await _emit(
                 "phase",
-                {"phase": "hyde", "message": "Generating hypothetical agent description..."},
+                {
+                    "phase": "hyde",
+                    "message": "Analyzer agent generating hypothetical agent description...",
+                    "agent_name": "analyzer",
+                },
             )
 
             hyde_prompt = (
@@ -1766,7 +1743,10 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             # --- Phase 2: vector search (non-LLM) ---
             await _emit(
                 "phase",
-                {"phase": "searching", "message": "Searching catalogue with vector similarity..."},
+                {
+                    "phase": "searching",
+                    "message": "Searching catalogue with vector similarity...",
+                },
             )
 
             embedding = embedder.embed(hypothetical_doc)
@@ -1792,7 +1772,11 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             # --- Phase 3: explain relevance (LLM) ---
             await _emit(
                 "phase",
-                {"phase": "explaining", "message": "Analyzing relevance of results..."},
+                {
+                    "phase": "explaining",
+                    "message": "Analyzer agent explaining relevance of results...",
+                    "agent_name": "analyzer",
+                },
             )
 
             agents_text = "\n".join(f"- {s.name}: {s.description}" for s, _, _ in results)

@@ -42,7 +42,7 @@
     word-break: break-word;
 }
 
-.af-text strong { color: var(--text-primary); font-weight: 600; }
+.af-text strong { color: var(--accent, #58a6ff); font-weight: 600; }
 
 /* Phase / running step: pulsing accent */
 .af-item.phase .af-icon { color: var(--accent, #58a6ff); }
@@ -187,24 +187,28 @@ class ActivityFeed {
             // ── App-level phase transitions ──
             case 'phase':
                 this._markLastRunningDone();
-                this._addPhase(data.message || data.phase || 'Processing...');
+                this._addPhase(data.message || data.phase || 'Processing...', data.agent_name);
                 break;
 
             // ── Amplifier kernel: tool calls ──
             case 'tool:pre': {
+                const agent = data.agent_name || '';
                 const name = data.tool_name || 'tool';
                 const preview = data.input_preview || '';
+                const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
                 this._add('→',
-                    `<span class="tool-name">${this._esc(name)}</span> ${this._esc(preview)}`,
+                    `${agentLabel}calling <span class="tool-name">${this._esc(name)}</span> ${this._esc(preview)}`,
                     'tool');
                 break;
             }
             case 'tool:post': {
+                const agent = data.agent_name || '';
                 const name = data.tool_name || 'tool';
                 const ok = data.success;
                 const preview = data.output_preview || '';
+                const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
                 this._add(ok ? '←' : '✗',
-                    `<span class="tool-name">${this._esc(name)}</span> ${ok ? preview : 'failed'}`,
+                    `${agentLabel}<span class="tool-name">${this._esc(name)}</span> ${ok ? preview : 'failed'}`,
                     ok ? 'tool' : 'error');
                 break;
             }
@@ -216,25 +220,28 @@ class ActivityFeed {
 
             // ── Amplifier kernel: content blocks (includes thinking) ──
             case 'content_block:start': {
+                const agent = data.agent_name || '';
                 const btype = data.block_type || 'text';
                 if (btype === 'thinking') {
-                    this._add('◌', 'Reasoning...', 'content');
+                    const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
+                    this._add('◌', `${agentLabel}Reasoning...`, 'content');
                 }
                 break;
             }
             case 'content_block:end': {
+                const agent = data.agent_name || '';
                 const btype = data.block_type || 'text';
                 const preview = data.text_preview || '';
                 const len = data.text_length || 0;
+                const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
                 if (btype === 'thinking' && preview) {
                     // Show a snippet of the thinking
-                    const lines = preview.split('\n').filter(l => l.trim());
-                    const snippet = lines.slice(0, 2).join(' ').substring(0, 180);
+                    const snippet = preview.split('\n').filter(l => l.trim()).slice(0, 2).join(' ').substring(0, 200);
                     if (snippet) {
-                        this._add('◌', this._esc(snippet) + (len > 180 ? '…' : ''), 'content');
+                        this._add('◌', `${agentLabel}${this._esc(snippet)}${len > 200 ? '…' : ''}`, 'content');
                     }
                 } else if (btype === 'text' && len > 0) {
-                    this._add('✎', `Response: ${len} chars`, 'detail');
+                    this._add('✎', `${agentLabel}response (${len} chars)`, 'detail');
                 }
                 // Show token usage if present
                 if (data.input_tokens || data.output_tokens) {
@@ -246,26 +253,37 @@ class ActivityFeed {
             }
 
             // ── Amplifier kernel: LLM provider calls ──
-            case 'provider:request':
+            case 'provider:request': {
+                const agent = data.agent_name || '';
+                const agentLabel = agent ? `${this._esc(agent)} → ` : '';
                 this._add('⟶',
-                    `Calling <strong>${this._esc(data.provider || 'LLM')}</strong> (${this._esc(data.model || '?')})`,
+                    `${agentLabel}<strong>${this._esc(data.provider || 'LLM')}</strong> (${this._esc(data.model || '?')})`,
                     'provider');
                 break;
+            }
             case 'provider:response':
                 if (data.input_tokens || data.output_tokens) {
+                    const agent = data.agent_name || '';
+                    const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
                     this._add('⟵',
-                        `${this._esc(data.model || 'LLM')}: ${data.input_tokens || '?'}→${data.output_tokens || '?'} tokens`,
+                        `${agentLabel}${this._esc(data.model || 'LLM')}: ${data.input_tokens || '?'}→${data.output_tokens || '?'} tokens`,
                         'provider');
                 }
                 break;
 
             // ── Amplifier kernel: orchestrator lifecycle ──
-            case 'execution:start':
-                this._add('▸', 'Agent reasoning started', 'detail');
+            case 'execution:start': {
+                const agent = data.agent_name || '';
+                const agentLabel = agent ? `<strong>${this._esc(agent)}</strong> ` : '';
+                this._add('▸', `${agentLabel}reasoning started`, 'detail');
                 break;
-            case 'execution:end':
-                this._add('▪', 'Agent reasoning complete', 'detail');
+            }
+            case 'execution:end': {
+                const agent = data.agent_name || '';
+                const agentLabel = agent ? `<strong>${this._esc(agent)}</strong> ` : '';
+                this._add('▪', `${agentLabel}reasoning complete`, 'detail');
                 break;
+            }
             case 'prompt:submit':
                 if (data.prompt_length) {
                     this._add('▸', `Prompt: ${data.prompt_length} chars`, 'detail');
@@ -301,10 +319,11 @@ class ActivityFeed {
 
     /* —— DOM helpers ————————————————————————————————————— */
 
-    _addPhase(text) {
+    _addPhase(text, agentName) {
         const el = document.createElement('div');
         el.className = 'af-item phase running';
-        el.innerHTML = `<span class="af-icon">●</span><span class="af-text">${this._esc(text)}</span>`;
+        const agentTag = agentName ? ` <strong>${this._esc(agentName)}</strong>` : '';
+        el.innerHTML = `<span class="af-icon">●</span><span class="af-text">${this._esc(text)}${agentTag}</span>`;
         this.container.appendChild(el);
         this._items.push(el);
         this.container.scrollTop = this.container.scrollHeight;

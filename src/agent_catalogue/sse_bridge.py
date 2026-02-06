@@ -74,8 +74,13 @@ class SSEBridge:
         if queue:
             await queue.put(None)
 
-    def register_hooks(self, session: Any, workflow_id: str) -> list:
+    def register_hooks(self, session: Any, workflow_id: str, agent_name: str | None = None) -> list:
         """Register event hooks on an AmplifierSession for SSE forwarding.
+
+        Args:
+            session: The AmplifierSession to hook into.
+            workflow_id: Routing key for the event queue.
+            agent_name: Optional agent identity tag added to every event.
 
         Returns list of unregister callables for cleanup.
         """
@@ -90,7 +95,7 @@ class SSEBridge:
             queue = self._queues.get(target)
             if queue:
                 try:
-                    serialized = _serialize_event(event, data)
+                    serialized = _serialize_event(event, data, agent_name=agent_name)
                     if serialized:
                         await queue.put(serialized)
                 except Exception:
@@ -115,11 +120,27 @@ class SSEBridge:
         return unregisters
 
 
-def _serialize_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
+def _serialize_event(
+    event: str, data: dict[str, Any], agent_name: str | None = None
+) -> dict[str, Any] | None:
     """Extract UI-relevant fields from kernel event data.
+
+    If *agent_name* is provided it is injected into the ``data`` dict of
+    every returned event so the UI can display which agent produced it.
 
     Returns None for events that have no useful UI representation.
     """
+    result = _build_event(event, data)
+
+    # Inject agent identity into every event for UI display
+    if result and agent_name:
+        result["data"]["agent_name"] = agent_name
+
+    return result
+
+
+def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a kernel event to a UI-friendly dict (no agent tagging)."""
 
     if event == "tool:pre":
         tool_name = data.get("tool_name", "unknown")

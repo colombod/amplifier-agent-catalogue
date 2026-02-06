@@ -367,7 +367,7 @@ class SessionManager:
         # Register SSE hooks for real-time streaming
         # Use the session's own ID as the routing key
         sid = session.session_id
-        unregisters = self.sse_bridge.register_hooks(session, sid)
+        unregisters = self.sse_bridge.register_hooks(session, sid, agent_name=agent_name)
         # Point the bridge queue to the caller's event_queue
         self.sse_bridge._queues[sid] = event_queue
 
