@@ -539,16 +539,19 @@ async def search_agents(
     limit: Annotated[int, Form(le=100)] = 20,
 ) -> list[SearchResult]:
     """Search for agents matching a problem description (vector search)."""
+    logger.info("POST /api/search: query=%r", query[:120])
     db_repo = request.app.state.db_repo
     embedder = request.app.state.embedder
     query_embedding = embedder.embed(query)
-    return db_repo.search(
+    results = db_repo.search(
         query_embedding,
         query_text=query,
         domains=domains,
         tools=tools,
         limit=limit,
     )
+    logger.info("POST /api/search: found %d results", len(results))
+    return results
 
 
 @router.post("/api/similar")
@@ -661,6 +664,7 @@ async def upload_agent(
 
     content = await file.read()
     content_str = content.decode("utf-8")
+    logger.info("POST /api/upload: content_length=%d", len(content_str))
 
     # Parse
     document = _parser.parse(content_str)
@@ -748,6 +752,7 @@ async def upload_agent(
     )
     version = db_repo.create_version(version)
 
+    logger.info("POST /api/upload: stored agent=%s version=%d", agent.name, 1)
     return UploadResponse(
         agent=AgentSummary(
             id=agent.id,
@@ -787,6 +792,7 @@ async def analyze_agent(
 
     content = await file.read()
     content_str = content.decode("utf-8")
+    logger.info("POST /api/analyze: content_length=%d", len(content_str))
 
     # Parse the document
     document = _parser.parse(content_str)
@@ -814,6 +820,10 @@ async def analyze_agent(
         f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
     )
     metadata = _build_metadata(_extract_json(extraction_response) or {}, document)
+    logger.info(
+        "POST /api/analyze: extraction complete, found %d capabilities",
+        len(metadata.capabilities),
+    )
 
     # LLM: classify agent via Amplifier
     classification_response = await session_mgr.run_one_shot(
@@ -858,6 +868,7 @@ async def analyze_agent(
     )
 
     has_significant_overlap = any(s.comparison.has_significant_overlap for s in similar_agents)
+    logger.info("POST /api/analyze: found %d similar agents", len(similar_agents))
 
     return AnalyzeResponse(
         metadata=metadata,
@@ -881,6 +892,7 @@ async def evaluate_agent_quality(
 
     content = await file.read()
     content_str = content.decode("utf-8")
+    logger.info("POST /api/evaluate: content_length=%d", len(content_str))
 
     # LLM: evaluate quality via Amplifier
     eval_response = await session_mgr.run_one_shot(
@@ -934,6 +946,7 @@ async def evaluate_agent_quality(
     # Token metrics
     token_metrics = _to_token_metrics(content_str)
 
+    logger.info("POST /api/evaluate: score=%.1f grade=%s", score, grade)
     return EvaluateResponse(
         overall_score=score,
         grade=grade,
@@ -965,6 +978,7 @@ async def improve_agent_quality(
 
     content = await file.read()
     content_str = content.decode("utf-8")
+    logger.info("POST /api/improve: content_length=%d", len(content_str))
 
     # Fetch catalogue neighbors for context-aware improvement
     embedding = embedder.embed(content_str)
@@ -1077,6 +1091,7 @@ async def improve_agent_quality(
     modified = sum(1 for c in changes if c["type"] in ("modified", "added"))
     summary = f"{modified} section(s) improved"
 
+    logger.info("POST /api/improve: improvement complete, %d section(s) changed", modified)
     return ImproveResponse(
         improved_content=improved,
         original_content=content_str,
@@ -1298,6 +1313,7 @@ async def search_with_agent(
     Step 2: Embed that description and vector search
     Step 3: LLM explains why each result is relevant
     """
+    logger.info("POST /api/search-agent: query=%r", query[:120])
     db_repo = request.app.state.db_repo
     embedder = request.app.state.embedder
     session_mgr = request.app.state.session_mgr
@@ -1377,6 +1393,7 @@ async def search_with_agent(
             }
         )
 
+    logger.info("POST /api/search-agent: found %d results", len(search_results))
     return {
         "results": search_results,
         "hypothetical_doc": hypothetical_doc.strip(),

@@ -119,17 +119,20 @@ class SessionManager:
         orch_id = self._mount_plan["session"]["orchestrator"]
         if orch_id in MODULE_SOURCES:
             modules_to_activate.append({"module": orch_id, "source": MODULE_SOURCES[orch_id]})
+            logger.info("Activating module %s from %s", orch_id, MODULE_SOURCES[orch_id])
 
         # Context
         ctx_id = self._mount_plan["session"]["context"]
         if ctx_id in MODULE_SOURCES:
             modules_to_activate.append({"module": ctx_id, "source": MODULE_SOURCES[ctx_id]})
+            logger.info("Activating module %s from %s", ctx_id, MODULE_SOURCES[ctx_id])
 
         # Providers
         for prov in self._mount_plan.get("providers", []):
             mod_id = prov["module"]
             if mod_id in MODULE_SOURCES:
                 modules_to_activate.append({"module": mod_id, "source": MODULE_SOURCES[mod_id]})
+                logger.info("Activating module %s from %s", mod_id, MODULE_SOURCES[mod_id])
 
         logger.info(
             "Activating %d Amplifier modules (cached in %s)",
@@ -263,6 +266,11 @@ class SessionManager:
 
         The child session is cleaned up after execution.
         """
+        logger.info(
+            "Spawning specialist agent=%s instruction_length=%d",
+            agent_name,
+            len(instruction),
+        )
         system_prompt = self._build_agent_prompt(agent_name)
 
         child = await self._create_session(parent_id=parent.session_id)
@@ -303,6 +311,11 @@ class SessionManager:
         Creates a fresh session, executes once, cleans up.
         No persistent state. Good for independent operations like search.
         """
+        logger.info(
+            "One-shot session: agent=%s instruction_length=%d",
+            agent_name,
+            len(instruction),
+        )
         system_prompt = self._build_agent_prompt(agent_name)
 
         session = await self._create_session()
@@ -417,6 +430,7 @@ class SessionManager:
                 }
             )
 
+        logger.info("Mount plan built with %d provider(s)", len(providers))
         return {
             "session": {
                 "orchestrator": "loop-streaming",

@@ -21,15 +21,32 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle: startup and shutdown."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Quiet noisy loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+
     config = get_config()
 
     # Initialize storage
+    logger.info("Initializing DuckDB at %s", config.storage.db_path)
     db_repo = DuckDBRepository(config.storage)
 
     # Initialize embedder (direct Azure OpenAI SDK - not Amplifier)
+    logger.info(
+        "Initializing embedder (endpoint=%s, auth=%s)",
+        config.embeddings.endpoint,
+        config.embeddings.auth,
+    )
     embedder = EmbedderService(config.embeddings)
 
     # Initialize Amplifier session manager
+    logger.info("Starting Amplifier SessionManager...")
     session_mgr = SessionManager(config)
     await session_mgr.startup(db_repo, embedder)
 
@@ -39,7 +56,7 @@ async def lifespan(app: FastAPI):
     app.state.embedder = embedder
     app.state.session_mgr = session_mgr
 
-    logger.info("Agent Catalogue started (Amplifier-powered)")
+    logger.info("Agent Catalogue ready on %s:%s", config.server.host, config.server.port)
     yield
 
     # Shutdown
