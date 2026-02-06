@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.name }} - Agent Catalogue{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+    <div>
+        <h1>{{ agent.name }}</h1>
+        <p class="text-muted">{{ agent.slug }} · v{{ current_version.version_number if current_version else 1 }}{% if current_version and current_version.token_count %} · {{ "{:,}".format(current_version.token_count) }} tokens{% endif %}</p>
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+        <a href="/download/{{ agent.slug }}?format=md" class="btn" title="Download AGENTS.md">Download .md</a>
+        <a href="/download/{{ agent.slug }}?format=json" class="btn btn-secondary" title="Download with metadata">Download .json</a>
+        <a href="/" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+<div class="grid grid-2">
+    <div>
+        <div class="card">
+            <h3>Description</h3>
+            <p>{{ agent.description or 'No description available.' }}</p>
+        </div>
+        
+        {% if current_version and current_version.metadata %}
+        <div class="card">
+            <h3>Purpose</h3>
+            <p>{{ current_version.metadata.get('purpose', 'Not specified') }}</p>
+        </div>
+        
+        <div class="card">
+            <h3>Capabilities</h3>
+            {% if current_version.metadata.get('capabilities') %}
+            <ul style="margin-left: 1.25rem;">
+                {% for cap in current_version.metadata.capabilities %}
+                <li>{{ cap }}</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted">No capabilities listed.</p>
+            {% endif %}
+        </div>
+        
+        <div class="card">
+            <h3>Classification</h3>
+            <p><strong>Complexity:</strong> {{ current_version.metadata.get('complexity', 'Unknown') }}</p>
+            <p><strong>Autonomy:</strong> {{ current_version.metadata.get('autonomy', 'Unknown') }}</p>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div>
+        {% if current_version and current_version.metadata %}
+        <div class="card">
+            <h3>Domains</h3>
+            {% for domain in current_version.metadata.get('domains', []) %}
+            <span class="tag tag-domain">{{ domain }}</span>
+            {% else %}
+            <p class="text-muted">No domains specified.</p>
+            {% endfor %}
+        </div>
+        
+        <div class="card">
+            <h3>Tools</h3>
+            {% for tool in current_version.metadata.get('tools', []) %}
+            <span class="tag tag-tool">{{ tool }}</span>
+            {% else %}
+            <p class="text-muted">No tools specified.</p>
+            {% endfor %}
+        </div>
+        
+        <div class="card">
+            <h3>Triggers</h3>
+            {% if current_version.metadata.get('triggers') %}
+            <ul style="margin-left: 1.25rem;">
+                {% for trigger in current_version.metadata.triggers %}
+                <li class="text-sm">{{ trigger }}</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted">No triggers specified.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <div class="card">
+            <h3>Version History</h3>
+            {% if versions %}
+            <table style="width: 100%; font-size: 0.875rem;">
+                <thead>
+                    <tr style="text-align: left; border-bottom: 1px solid var(--border);">
+                        <th style="padding: 0.5rem 0;">Version</th>
+                        <th style="padding: 0.5rem 0;">Date</th>
+                        <th style="padding: 0.5rem 0;">Tokens</th>
+                        <th style="padding: 0.5rem 0;">Change</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in versions %}
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;">
+                            v{{ v.version_number }}
+                            {% if current_version and v.id == current_version.id %}
+                            <span class="tag">current</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 0.5rem 0;" class="text-muted">
+                            {{ v.created_at.strftime('%Y-%m-%d') }}
+                        </td>
+                        <td style="padding: 0.5rem 0;" class="text-muted">
+                            {{ "{:,}".format(v.token_count) if v.token_count else '-' }}
+                        </td>
+                        <td style="padding: 0.5rem 0;">
+                            {{ v.change_summary or '-' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">No versions available.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if current_version %}
+<div class="card mt-2">
+    <h3>Raw Content</h3>
+    <details>
+        <summary class="text-muted" style="cursor: pointer;">Click to expand AGENTS.md content</summary>
+        <pre style="margin-top: 1rem; max-height: 500px; overflow-y: auto;"><code>{{ current_version.raw_content }}</code></pre>
+    </details>
+</div>
+{% endif %}
+{% endblock %}
