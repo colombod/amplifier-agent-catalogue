@@ -8,6 +8,8 @@ dependencies = [
     # Amplifier
     "amplifier-core",
     "amplifier-foundation",
+    # CLI
+    "click>=8.1.0",
     # Web framework
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
@@ -21,7 +23,7 @@ dependencies = [
     "duckdb>=0.10.0",
     # Data processing
     "pydantic>=2.6.0",
-    "pydantic-settings>=2.1.0",
+    "pyyaml>=6.0.3",
     # Markdown parsing
     "markdown-it-py>=3.0.0",
     # Utilities

@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from amplifier_core import AmplifierSession
@@ -21,6 +20,7 @@ from amplifier_foundation.bundle import BundleModuleResolver
 from amplifier_foundation.modules.activator import ModuleActivator
 
 from agent_catalogue.config import Config
+from agent_catalogue.paths import get_agents_dir, get_cache_dir, get_context_dir
 from agent_catalogue.session_store import SessionStore
 from agent_catalogue.sse_bridge import SSEBridge
 from agent_catalogue.tools import create_catalogue_tools
@@ -70,10 +70,10 @@ class SessionManager:
         self._hook_unregisters: dict[str, list] = {}
         self.sse_bridge = SSEBridge()
         self.session_store = SessionStore()
-        self._agents_dir = Path(__file__).parent.parent.parent / "agents"
-        self._context_dir = Path(__file__).parent.parent.parent / "context"
+        self._agents_dir = get_agents_dir()
+        self._context_dir = get_context_dir()
         self._agent_cache: dict[str, str] = {}
-        self._cache_dir = Path.home() / ".amplifier" / "cache"
+        self._cache_dir = get_cache_dir()
 
     async def startup(self, db_repo: Any, embedder: Any) -> None:
         """Initialize the session manager. Called during FastAPI lifespan startup.
@@ -405,40 +405,15 @@ class SessionManager:
     def _build_mount_plan(self) -> dict[str, Any]:
         """Build the Amplifier mount plan from app config.
 
-        The mount plan declares which modules to load and how to configure
-        them. Module sources are in MODULE_SOURCES (resolved by _activate_modules).
+        Providers are already in mount-plan format from settings.yaml,
+        so we pass them through directly.
         """
         providers = []
-
-        # Azure OpenAI provider (primary)
-        azure_config: dict[str, Any] = {
-            "azure_endpoint": self._config.azure_openai.endpoint,
-            "api_version": self._config.azure_openai.api_version,
-            "default_model": self._config.azure_openai.chat_deployment,
-            "priority": 1,
-        }
-        if self._config.azure_openai.use_rbac:
-            azure_config["use_default_credential"] = True
-        elif self._config.azure_openai.api_key:
-            azure_config["api_key"] = self._config.azure_openai.api_key
-
-        providers.append(
-            {
-                "module": "provider-azure-openai",
-                "config": azure_config,
-            }
-        )
-
-        # Anthropic provider (fallback, only if configured)
-        if self._config.anthropic.api_key:
+        for prov in self._config.providers:
             providers.append(
                 {
-                    "module": "provider-anthropic",
-                    "config": {
-                        "default_model": self._config.anthropic.default_model,
-                        "api_key": self._config.anthropic.api_key,
-                        "priority": 2,
-                    },
+                    "module": prov.module,
+                    "config": dict(prov.config),  # copy to avoid mutation
                 }
             )
 

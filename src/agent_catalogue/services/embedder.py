@@ -1,25 +1,36 @@
 """Embedding generation service using Azure OpenAI."""
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
-from agent_catalogue.config import AzureOpenAIConfig, get_config
+if TYPE_CHECKING:
+    from agent_catalogue.config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
 
 class EmbedderService:
-    """Generate vector embeddings using Azure OpenAI."""
+    """Generate vector embeddings using Azure OpenAI.
 
-    def __init__(self, config: AzureOpenAIConfig | None = None):
+    Accepts the new EmbeddingConfig dataclass from settings.yaml.
+    """
+
+    def __init__(self, config: EmbeddingConfig | None = None):
         """Initialize the embedder service.
 
         Args:
-            config: Azure OpenAI configuration. Uses global config if not provided.
+            config: Embedding configuration. Uses global config if not provided.
         """
-        self.config = config or get_config().azure_openai
+        if config is None:
+            from agent_catalogue.config import get_config
+
+            config = get_config().embeddings
+        self.config = config
         self._client: AzureOpenAI | None = None
 
     @property
@@ -31,7 +42,7 @@ class EmbedderService:
 
     def _create_client(self) -> AzureOpenAI:
         """Create Azure OpenAI client with appropriate authentication."""
-        if self.config.api_key:
+        if self.config.auth == "api_key" and self.config.api_key:
             logger.info("Using API key authentication for embeddings")
             return AzureOpenAI(
                 api_key=self.config.api_key,
@@ -61,7 +72,7 @@ class EmbedderService:
             Embedding vector as list of floats
         """
         response = self.client.embeddings.create(
-            model=self.config.embedding_deployment,
+            model=self.config.deployment,
             input=text,
         )
         return response.data[0].embedding
@@ -79,7 +90,7 @@ class EmbedderService:
             return []
 
         response = self.client.embeddings.create(
-            model=self.config.embedding_deployment,
+            model=self.config.deployment,
             input=texts,
         )
 

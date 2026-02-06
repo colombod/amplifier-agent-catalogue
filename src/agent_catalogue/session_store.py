@@ -5,12 +5,11 @@ patterns as amplifier-app-cli's SessionStore:
 - Atomic writes with backup for crash safety
 - transcript.jsonl: one message per line (user/assistant only, no system)
 - metadata.json: session metadata (id, timestamps, turn count, status)
-- Project-scoped storage under ~/.amplifier/projects/<slug>/sessions/
+- Flat storage under ~/.agent-catalogue/sessions/<session-id>/
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import shutil
@@ -18,35 +17,28 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from agent_catalogue.paths import get_session_dir, get_sessions_dir
 
-# Storage root for all session data
-DEFAULT_BASE_DIR = Path.home() / ".amplifier" / "projects"
+logger = logging.getLogger(__name__)
 
 
 class SessionStore:
     """Persists session transcripts and metadata to disk.
 
     Storage layout:
-        ~/.amplifier/projects/<project-slug>/sessions/<session-id>/
+        ~/.agent-catalogue/sessions/<session-id>/
             transcript.jsonl    # One message per line
             metadata.json       # Session metadata
     """
 
-    def __init__(self, base_dir: Path | None = None, project_slug: str | None = None) -> None:
-        self._base_dir = base_dir or DEFAULT_BASE_DIR
-        self._project_slug = project_slug or _get_project_slug()
-
     @property
     def sessions_dir(self) -> Path:
-        """Root directory for all sessions in this project."""
-        return self._base_dir / self._project_slug / "sessions"
+        """Root directory for all sessions."""
+        return get_sessions_dir()
 
     def session_dir(self, session_id: str) -> Path:
         """Directory for a specific session."""
-        # Sanitize session_id to prevent path traversal
-        safe_id = session_id.replace("/", "_").replace("\\", "_").replace("..", "_")
-        return self.sessions_dir / safe_id
+        return get_session_dir(session_id)
 
     def save(
         self,
@@ -142,16 +134,6 @@ class SessionStore:
 
 
 # -- Helpers -----------------------------------------------------------------
-
-
-def _get_project_slug() -> str:
-    """Generate a project slug from the current working directory."""
-    cwd = str(Path.cwd())
-    name = Path.cwd().name
-    hash_suffix = hashlib.sha256(cwd.encode()).hexdigest()[:8]
-    # Sanitize name
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in name)
-    return f"{safe_name}-{hash_suffix}"
 
 
 def _write_with_backup(path: Path, content: str) -> None:

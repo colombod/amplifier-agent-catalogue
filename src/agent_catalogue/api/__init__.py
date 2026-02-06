@@ -23,11 +23,11 @@ async def lifespan(app: FastAPI):
     """Manage application lifecycle: startup and shutdown."""
     config = get_config()
 
-    # Initialize storage (schema is created in __init__)
+    # Initialize storage
     db_repo = DuckDBRepository(config.storage)
 
     # Initialize embedder (direct Azure OpenAI SDK - not Amplifier)
-    embedder = EmbedderService(config.azure_openai)
+    embedder = EmbedderService(config.embeddings)
 
     # Initialize Amplifier session manager
     session_mgr = SessionManager(config)

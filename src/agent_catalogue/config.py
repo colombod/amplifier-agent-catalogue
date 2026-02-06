@@ -1,178 +1,158 @@
-"""Configuration management for Agent Catalogue.
+"""Configuration for Agent Catalogue.
 
-Supports:
-- Azure OpenAI with API key or RBAC authentication for embeddings
-- Standard OpenAI API for chat/extraction
-- Anthropic API for chat/extraction
+Loads from settings.yaml (via the settings module) and provides
+typed access to all configuration values. Also initializes the
+KeyManager to populate env vars from keys.env before settings
+are resolved.
+
+Config flow:
+  keys.env → os.environ → settings.yaml (${VAR} resolved) → Config
 """
 
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from agent_catalogue.key_manager import KeyManager
+from agent_catalogue.paths import get_default_db_path
+from agent_catalogue.settings import load_settings
 
-
-class OpenAIConfig(BaseSettings):
-    """Standard OpenAI API configuration for chat/extraction."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="AS_OPENAI_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    api_key: str | None = Field(
-        default=None,
-        description="OpenAI API key",
-    )
-    base_url: str = Field(
-        default="https://api.openai.com/v1",
-        description="OpenAI API base URL",
-    )
-    model: str = Field(
-        default="gpt-4o",
-        description="Model name for chat/extraction",
-    )
+logger = logging.getLogger(__name__)
 
 
-class AzureOpenAIConfig(BaseSettings):
-    """Azure OpenAI configuration for embeddings."""
+@dataclass
+class ProviderConfig:
+    """Configuration for a single Amplifier provider."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="AS_AZURE_OPENAI_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    # Endpoint configuration
-    endpoint: str = Field(
-        default="",
-        description="Azure OpenAI endpoint URL",
-        examples=["https://your-resource.openai.azure.com/"],
-    )
-    api_version: str = Field(
-        default="2024-02-01",
-        description="Azure OpenAI API version",
-    )
-
-    # Deployment names
-    chat_deployment: str = Field(
-        default="gpt-4o",
-        description="Deployment name for chat/completion model",
-    )
-    embedding_deployment: str = Field(
-        default="text-embedding-3-small",
-        description="Deployment name for embedding model",
-    )
-
-    # Authentication
-    api_key: str | None = Field(
-        default=None,
-        description="Azure OpenAI API key. If not set, uses DefaultAzureCredential (RBAC)",
-    )
-    use_rbac: bool = Field(
-        default=False,
-        description="Use RBAC via DefaultAzureCredential instead of API key",
-    )
+    module: str = ""
+    config: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def auth_type(self) -> Literal["api_key", "rbac"]:
-        """Return the authentication type being used."""
-        if self.use_rbac or not self.api_key:
-            return "rbac"
-        return "api_key"
+    def priority(self) -> int:
+        return self.config.get("priority", 10)
+
+    @property
+    def is_active(self) -> bool:
+        return self.priority == 1
 
 
-class AnthropicConfig(BaseSettings):
-    """Anthropic API configuration for chat/extraction."""
+@dataclass
+class EmbeddingConfig:
+    """Configuration for the embedding service (direct Azure OpenAI SDK)."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="AS_ANTHROPIC_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    endpoint: str = ""
+    deployment: str = "text-embedding-3-large"
+    model: str = "text-embedding-3-large"
+    dimensions: int = 3072
+    api_version: str = "2024-12-01-preview"
+    auth: str = "rbac"  # "rbac" or "api_key"
+    api_key: str = ""
 
-    api_key: str | None = Field(
-        default=None,
-        description="Anthropic API key",
-    )
-    default_model: str = Field(
-        default="claude-sonnet-4-20250514",
-        description="Default Anthropic model for chat/extraction",
-    )
+    @property
+    def use_rbac(self) -> bool:
+        return self.auth == "rbac"
 
 
-class StorageConfig(BaseSettings):
+@dataclass
+class StorageConfig:
     """Storage configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="AS_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    db_path: Path = Field(
-        default=Path.home() / ".agent-catalogue" / "catalogue.duckdb",
-        description="Path to DuckDB database file",
-    )
-
-    @field_validator("db_path", mode="before")
-    @classmethod
-    def expand_path(cls, v: str | Path) -> Path:
-        """Expand ~ in path."""
-        if isinstance(v, str):
-            v = Path(v)
-        return v.expanduser()
+    db_path: Path = field(default_factory=get_default_db_path)
 
 
-class ServerConfig(BaseSettings):
+@dataclass
+class ServerConfig:
     """Server configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="AS_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    host: str = Field(default="127.0.0.1", description="Server host")
-    port: int = Field(default=8000, description="Server port")
-    debug: bool = Field(default=False, description="Enable debug mode")
+    host: str = "127.0.0.1"
+    port: int = 8000
+    debug: bool = False
 
 
-class Config(BaseSettings):
-    """Main configuration combining all sub-configs."""
+@dataclass
+class Config:
+    """Main configuration combining all sub-configs.
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    Built from settings.yaml + keys.env + env vars.
+    """
 
-    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
-    azure_openai: AzureOpenAIConfig = Field(default_factory=AzureOpenAIConfig)
-    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
-    storage: StorageConfig = Field(default_factory=StorageConfig)
-    server: ServerConfig = Field(default_factory=ServerConfig)
+    providers: list[ProviderConfig] = field(default_factory=list)
+    embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
+    raw_settings: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def active_provider(self) -> ProviderConfig | None:
+        """Get the active (lowest priority) provider."""
+        if not self.providers:
+            return None
+        return min(self.providers, key=lambda p: p.priority)
 
     @classmethod
-    def load(cls) -> "Config":
-        """Load configuration from environment and .env file."""
+    def load(cls) -> Config:
+        """Load configuration from settings.yaml + keys.env + env vars.
+
+        1. KeyManager loads keys.env into os.environ
+        2. settings.yaml loaded and merged (global < project < local)
+        3. ${VAR} placeholders resolved from os.environ
+        4. Typed Config built from resolved settings
+        """
+        # Step 1: Load API keys into env
+        key_mgr = KeyManager()
+        key_mgr.load_keys()
+
+        # Step 2+3: Load and resolve settings
+        settings = load_settings()
+
+        # Step 4: Build typed config
+        providers = []
+        for prov_dict in settings.get("providers", []):
+            providers.append(
+                ProviderConfig(
+                    module=prov_dict.get("module", ""),
+                    config=prov_dict.get("config", {}),
+                )
+            )
+
+        emb = settings.get("embeddings", {})
+        embeddings = EmbeddingConfig(
+            endpoint=emb.get("endpoint", ""),
+            deployment=emb.get("deployment", "text-embedding-3-large"),
+            model=emb.get("model", "text-embedding-3-large"),
+            dimensions=emb.get("dimensions", 3072),
+            api_version=emb.get("api_version", "2024-12-01-preview"),
+            auth=emb.get("auth", "rbac"),
+            api_key=emb.get("api_key", ""),
+        )
+
+        stor = settings.get("storage", {})
+        db_path_str = stor.get("db_path", "")
+        storage = StorageConfig(
+            db_path=Path(db_path_str).expanduser() if db_path_str else get_default_db_path(),
+        )
+
+        srv = settings.get("server", {})
+        server = ServerConfig(
+            host=srv.get("host", "127.0.0.1"),
+            port=int(srv.get("port", 8000)),
+            debug=bool(srv.get("debug", False)),
+        )
+
         return cls(
-            openai=OpenAIConfig(),
-            azure_openai=AzureOpenAIConfig(),
-            anthropic=AnthropicConfig(),
-            storage=StorageConfig(),
-            server=ServerConfig(),
+            providers=providers,
+            embeddings=embeddings,
+            storage=storage,
+            server=server,
+            raw_settings=settings,
         )
 
 
-# Global config instance (lazy loaded)
+# ── Global singleton ──────────────────────────────────────────────────
+
 _config: Config | None = None
 
 
