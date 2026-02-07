@@ -109,10 +109,15 @@ def _extract_json(text: str) -> dict[str, Any] | None:
         result = json.loads(stripped)
         if isinstance(result, dict):
             return result
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        logger.warning("Direct parse failed: %s", str(e))
 
-    logger.warning("Failed to extract JSON from LLM response (%d chars)", len(text))
+    # All methods failed - log what we received
+    logger.error(
+        "Failed to extract JSON from LLM response (%d chars). First 300 chars: %s",
+        len(text),
+        text[:300],
+    )
     return None
 
 
@@ -1538,11 +1543,12 @@ async def stream_improve(request: Request) -> StreamingResponse:
 
     Three phases:
     1. Finding similar agents in catalogue (embedding + DB)
-    2. Evaluator agent assessing quality (LLM)
+    2. Evaluator agent assessing quality (LLM) - OPTIONAL if evaluation provided
     3. Improver agent generating enhanced version (LLM)
     """
     body = await request.json()
     content_str = body.get("content", "")
+    provided_evaluation = body.get("evaluation")  # May be passed from Step 4
     if not content_str:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -1582,25 +1588,29 @@ async def stream_improve(request: Request) -> StreamingResponse:
                 )
                 catalogue_neighbors.append(neighbor)
 
-            # --- Phase 2: evaluate (LLM) ---
-            await _emit(
-                "phase",
-                {
-                    "phase": "evaluating",
-                    "message": "Evaluator agent assessing quality...",
-                    "agent_name": "evaluator",
-                },
-            )
+            # --- Phase 2: evaluate (LLM) - SKIP if evaluation provided ---
+            if provided_evaluation:
+                logger.info("Using provided evaluation from Step 4 (skipping evaluator)")
+                evaluation = provided_evaluation
+            else:
+                await _emit(
+                    "phase",
+                    {
+                        "phase": "evaluating",
+                        "message": "Evaluator agent assessing quality...",
+                        "agent_name": "evaluator",
+                    },
+                )
 
-            eval_response = await session_mgr.run_one_shot_streaming(
-                "evaluator",
-                f"Evaluate the quality of this AGENTS.md file. "
-                f"Return JSON with: overall_score, grade, issues (list with "
-                f"severity/description/suggestion), strengths, summary.\n\n"
-                f"<content>\n{content_str}\n</content>",
-                queue,
-            )
-            evaluation = _extract_json(eval_response) or {}
+                eval_response = await session_mgr.run_one_shot_streaming(
+                    "evaluator",
+                    f"Evaluate the quality of this AGENTS.md file. "
+                    f"Return JSON with: overall_score, grade, issues (list with "
+                    f"severity/description/suggestion), strengths, summary.\n\n"
+                    f"<content>\n{content_str}\n</content>",
+                    queue,
+                )
+                evaluation = _extract_json(eval_response) or {}
 
             # Build improvement prompt with catalogue context
             issues_summary = []
@@ -1919,7 +1929,17 @@ async def stream_analyze(request: Request):
                 f"Extract structured metadata from this AGENTS.md content. "
                 f"Return ONLY valid JSON.\n\n{content_str}",
             )
-            metadata = _build_metadata(_extract_json(extraction_response) or {}, document)
+            logger.info(
+                "Extractor response (%d chars): %s...",
+                len(extraction_response),
+                extraction_response[:200],
+            )
+            extracted_json = _extract_json(extraction_response)
+            if extracted_json is None:
+                logger.error(
+                    "Failed to extract JSON from extractor response: %s", extraction_response[:500]
+                )
+            metadata = _build_metadata(extracted_json or {}, document)
             await _emit(
                 "step",
                 {

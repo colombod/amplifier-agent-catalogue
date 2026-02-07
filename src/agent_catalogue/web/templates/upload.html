@@ -1638,7 +1638,10 @@ async function requestImprovement() {
 
         const feed = new ActivityFeed('improve-activity-feed');
         try {
-            const data = await feed.start('/api/stream/improve', { content: contentStr });
+            const data = await feed.start('/api/stream/improve', { 
+                content: contentStr,
+                evaluation: evaluationData  // Pass Step 4 evaluation to skip re-running
+            });
             await _displayImproveResults(data);
             return;
         } catch {
