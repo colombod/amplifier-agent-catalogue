@@ -1198,8 +1198,37 @@ async def refine_agent_content(
     )
 
     # Use differentiator agent (has strategic frameworks), not improver
-    refined_raw = await session_mgr.run_one_shot("differentiator", refine_prompt)
-    refined = _strip_preamble(refined_raw)
+    try:
+        logger.info("=" * 80)
+        logger.info("CALLING DIFFERENTIATOR AGENT")
+        logger.info("  Prompt length: %d chars", len(refine_prompt))
+        logger.info("  Overlapping agents: %d", len(full_agents))
+
+        refined_raw = await session_mgr.run_one_shot("differentiator", refine_prompt)
+
+        logger.info("DIFFERENTIATOR RESPONSE:")
+        logger.info("  Length: %d chars", len(refined_raw) if refined_raw else 0)
+        logger.info("  First 500 chars: %r", refined_raw[:500] if refined_raw else "EMPTY")
+        logger.info(
+            "  Last 200 chars: %r",
+            refined_raw[-200:] if refined_raw and len(refined_raw) > 200 else refined_raw,
+        )
+        logger.info("=" * 80)
+
+        if not refined_raw or len(refined_raw.strip()) < 100:
+            logger.error("Differentiator returned insufficient output")
+            raise HTTPException(
+                status_code=500,
+                detail="Agent returned empty/invalid response. Check debug log",
+            )
+
+        refined = _strip_preamble(refined_raw)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Refine failed")
+        raise HTTPException(status_code=500, detail=f"Refinement error: {str(e)}") from None
 
     changes = _compute_diff_sections(content_str, refined)
     token_metrics = _to_token_metrics(refined)
