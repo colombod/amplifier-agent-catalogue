@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -2151,3 +2152,135 @@ def _generate_slug(name: str) -> str:
     slug = re.sub(r"[^\w\s-]", "", slug)
     slug = re.sub(r"[\s_]+", "-", slug)
     return slug.strip("-") or "unknown"
+
+
+# ===================================================================
+# Recipe Session State Management Helpers
+# ===================================================================
+
+
+def _get_recipe_sessions_root() -> Path:
+    """Get the recipe-sessions root directory for this project.
+
+    Amplifier stores recipe sessions in:
+    ~/.amplifier/projects/{project_name}/recipe-sessions/
+
+    where project_name is derived from the current working directory.
+    """
+    cwd = Path.cwd()
+    # Convert /home/user/project to home-user-project (Amplifier's convention)
+    project_name = str(cwd).replace("/", "-").lstrip("-")
+
+    amplifier_home = Path.home() / ".amplifier"
+    return amplifier_home / "projects" / project_name / "recipe-sessions"
+
+
+def _get_recipe_session_dir(session_id: str) -> Path:
+    """Get the directory for a specific recipe session.
+
+    Args:
+        session_id: Recipe session ID (e.g., "recipe_20260207_143022_a3f2")
+
+    Returns:
+        Path to session directory
+
+    Raises:
+        FileNotFoundError: If session directory doesn't exist
+    """
+    sessions_root = _get_recipe_sessions_root()
+    session_dir = sessions_root / session_id
+
+    if not session_dir.exists():
+        raise FileNotFoundError(f"Recipe session not found: {session_id}")
+
+    return session_dir
+
+
+def _load_recipe_session_state(session_id: str) -> dict[str, Any]:
+    """Load the state.json file for a recipe session.
+
+    Args:
+        session_id: Recipe session ID
+
+    Returns:
+        Dict containing session state with keys:
+        - status: "running" | "paused_for_approval" | "completed" | "failed"
+        - current_stage: Current stage name (if running/paused)
+        - context: Dict of step outputs and variables
+        - recipe_name: Name of the recipe
+
+    Raises:
+        FileNotFoundError: If session or state file doesn't exist
+        json.JSONDecodeError: If state.json is malformed
+    """
+    session_dir = _get_recipe_session_dir(session_id)
+    state_file = session_dir / "state.json"
+
+    if not state_file.exists():
+        raise FileNotFoundError(f"State file not found for session: {session_id}")
+
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+
+        # Validate required fields
+        if "status" not in state:
+            raise ValueError("Invalid state file: missing 'status' field")
+
+        return state
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse state.json for session {session_id}: {e}")
+        raise
+
+
+def _list_recipe_sessions() -> list[dict[str, Any]]:
+    """List all recipe sessions in the project.
+
+    Returns:
+        List of dicts containing session metadata:
+        - session_id: Session identifier
+        - recipe_name: Name of the recipe
+        - status: Current status
+        - current_stage: Current stage (if applicable)
+        - created_at: Creation timestamp (if available)
+    """
+    sessions_root = _get_recipe_sessions_root()
+
+    # If directory doesn't exist yet, return empty list
+    if not sessions_root.exists():
+        return []
+
+    sessions = []
+
+    for session_dir in sessions_root.iterdir():
+        if not session_dir.is_dir():
+            continue
+
+        session_id = session_dir.name
+        state_file = session_dir / "state.json"
+
+        # Skip if no state file
+        if not state_file.exists():
+            continue
+
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "recipe_name": state.get("recipe_name", "unknown"),
+                    "status": state.get("status", "unknown"),
+                    "current_stage": state.get("current_stage"),
+                    "created_at": state.get("created_at"),
+                }
+            )
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load session {session_id}: {e}")
+            continue
+
+    # Sort by creation time (newest first) if available
+    sessions.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+
+    return sessions
