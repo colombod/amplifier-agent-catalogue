@@ -31,12 +31,17 @@ class GetCatalogueStatsTool:
             "(total agents, domains, avg quality scores)."
         )
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {},
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:
@@ -78,8 +83,8 @@ class ComputeEmbeddingTool:
     def description(self) -> str:
         return "Generate a vector embedding for text content. Useful for similarity comparisons."
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -90,6 +95,11 @@ class ComputeEmbeddingTool:
             },
             "required": ["text"],
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:

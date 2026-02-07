@@ -32,8 +32,8 @@ class SearchSimilarTool:
             "using vector similarity. Returns ranked results with similarity scores."
         )
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -51,38 +51,64 @@ class SearchSimilarTool:
             "required": ["query"],
         }
 
-    async def execute(self, input: dict) -> ToolResult:
-        try:
-            query = input["query"]
-            limit = min(input.get("limit", 10), 50)
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
+    async def execute(self, input: dict) -> ToolResult:
+        query = input.get("query", "")
+        limit = min(input.get("limit", 10), 50)
+
+        logger.info("=" * 60)
+        logger.info("TOOL EXECUTE: search_similar")
+        logger.info("  query: %r (length=%d)", query[:100], len(query))
+        logger.info("  limit: %d", limit)
+        logger.info("  embedder: %s", type(self._embedder).__name__)
+        logger.info("  db_repo: %s", type(self._db).__name__)
+
+        try:
+            logger.info("  → Calling embedder.embed()...")
             embedding = self._embedder.embed(query)
+            logger.info("  ✓ Generated embedding: %d dimensions", len(embedding))
+
+            logger.info(
+                "  → Calling db.find_similar_with_metadata(threshold=0.3, limit=%d)...", limit
+            )
             results = self._db.find_similar_with_metadata(
                 embedding=embedding,
                 threshold=0.3,
                 limit=limit,
             )
+            logger.info("  ✓ Found %d similar agents", len(results))
 
-            return ToolResult(
-                output={
-                    "count": len(results),
-                    "agents": [
-                        {
-                            "id": str(summary.id),
-                            "name": summary.name,
-                            "slug": summary.slug,
-                            "description": summary.description,
-                            "similarity_score": round(score, 3),
-                            "domains": metadata.get("domains", []),
-                            "capabilities": metadata.get("capabilities", [])[:5],
-                        }
-                        for summary, score, metadata in results
-                    ],
-                }
-            )
+            output = {
+                "count": len(results),
+                "agents": [
+                    {
+                        "id": str(summary.id),
+                        "name": summary.name,
+                        "slug": summary.slug,
+                        "description": summary.description,
+                        "similarity_score": round(score, 3),
+                        "domains": metadata.get("domains", []),
+                        "capabilities": metadata.get("capabilities", [])[:5],
+                    }
+                    for summary, score, metadata in results
+                ],
+            }
+
+            logger.info("  ✓ SUCCESS: Returning %d agents", len(output["agents"]))
+            logger.info("=" * 60)
+            return ToolResult(output=output)
+
         except Exception as e:
-            logger.exception("search_similar failed")
-            return ToolResult(success=False, error={"message": str(e)})
+            logger.error("  ✗ EXCEPTION: %s: %s", type(e).__name__, str(e))
+            logger.exception("Full traceback:")
+            logger.info("=" * 60)
+            return ToolResult(
+                success=False, error={"message": f"search_similar error: {type(e).__name__}: {e}"}
+            )
 
 
 class ListAgentsTool:
@@ -99,8 +125,8 @@ class ListAgentsTool:
     def description(self) -> str:
         return "List agents in the catalogue with optional text search filtering and pagination."
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -120,6 +146,11 @@ class ListAgentsTool:
                 },
             },
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:

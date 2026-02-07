@@ -32,8 +32,8 @@ class GetAgentTool:
     def description(self) -> str:
         return "Get detailed information about an agent by its unique ID."
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -45,6 +45,11 @@ class GetAgentTool:
             },
             "required": ["agent_id"],
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:
@@ -97,8 +102,8 @@ class GetAgentBySlugTool:
     def description(self) -> str:
         return "Get an agent by its URL-friendly slug name."
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -109,6 +114,11 @@ class GetAgentBySlugTool:
             },
             "required": ["slug"],
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:
@@ -148,8 +158,8 @@ class GetAgentContentTool:
     def description(self) -> str:
         return "Get the raw AGENTS.md content for an agent."
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -166,62 +176,84 @@ class GetAgentContentTool:
             "required": ["agent_id"],
         }
 
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
+
     async def execute(self, input: dict) -> ToolResult:
         agent_id_raw = input.get("agent_id", "")
-        logger.info("get_agent_content called with agent_id=%s", agent_id_raw)
+        version_num = input.get("version")
+
+        logger.info("=" * 60)
+        logger.info("TOOL EXECUTE: get_agent_content")
+        logger.info("  agent_id: %r", agent_id_raw)
+        logger.info("  version: %s", version_num)
+        logger.info("  db_repo: %s", type(self._db).__name__)
 
         try:
+            logger.info("  → Parsing UUID...")
             agent_uuid = UUID(agent_id_raw)
+            logger.info("  ✓ Parsed UUID: %s", agent_uuid)
         except ValueError as e:
-            logger.warning("get_agent_content: invalid UUID format: %s", agent_id_raw)
+            logger.error("  ✗ Invalid UUID format: %s (error: %s)", agent_id_raw, e)
+            logger.info("=" * 60)
             return ToolResult(
                 success=False,
                 error={"message": f"Invalid UUID format: {agent_id_raw}"},
             )
 
         try:
+            logger.info("  → Calling db.get_agent(%s)...", agent_uuid)
             agent = self._db.get_agent(agent_uuid)
+
             if not agent:
-                logger.warning("get_agent_content: agent not found: %s", agent_uuid)
+                logger.error("  ✗ Agent not found: %s", agent_uuid)
+                logger.info("=" * 60)
                 return ToolResult(
                     success=False,
                     error={"message": f"Agent not found with ID: {agent_id_raw}"},
                 )
 
+            logger.info("  ✓ Found agent: %s", agent.name)
             version_num = input.get("version")
             if version_num is not None:
+                logger.info("  → Fetching version %d...", version_num)
                 version = self._db.get_version_by_number(agent_uuid, version_num)
-                logger.info(
-                    "get_agent_content: fetching version %d for agent %s", version_num, agent.name
-                )
             else:
+                logger.info("  → Fetching latest version...")
                 version = self._db.get_latest_version(agent_uuid)
-                logger.info("get_agent_content: fetching latest version for agent %s", agent.name)
 
             if not version:
-                logger.warning("get_agent_content: no version found for agent %s", agent.name)
+                logger.error("  ✗ No version found for agent %s", agent.name)
+                logger.info("=" * 60)
                 return ToolResult(
                     success=False,
                     error={"message": f"No version found for agent '{agent.name}'"},
                 )
 
             logger.info(
-                "get_agent_content: success - returning %d chars for %s v%d",
-                len(version.raw_content),
-                agent.name,
-                version.version_number,
+                "  ✓ Found version %d (%d chars)", version.version_number, len(version.raw_content)
             )
-            return ToolResult(
-                output={
-                    "agent_id": str(agent.id),
-                    "agent_name": agent.name,
-                    "version": version.version_number,
-                    "content": version.raw_content,
-                    "content_hash": version.content_hash,
-                }
+
+            output = {
+                "agent_id": str(agent.id),
+                "agent_name": agent.name,
+                "version": version.version_number,
+                "content": version.raw_content,
+                "content_hash": version.content_hash,
+            }
+
+            logger.info(
+                "  ✓ SUCCESS: Returning content for %s v%d", agent.name, version.version_number
             )
+            logger.info("=" * 60)
+            return ToolResult(output=output)
+
         except Exception as e:
-            logger.exception("get_agent_content failed for agent_id=%s", agent_id_raw)
+            logger.error("  ✗ EXCEPTION: %s: %s", type(e).__name__, str(e))
+            logger.exception("Full traceback:")
+            logger.info("=" * 60)
             return ToolResult(
                 success=False,
                 error={"message": f"get_agent_content error: {type(e).__name__}: {e}"},
@@ -246,8 +278,8 @@ class StoreAgentTool:
             "Requires metadata, raw content, and optionally evaluation results."
         )
 
-    @property
-    def input_schema(self) -> dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
+        """Return JSON schema for tool input."""
         return {
             "type": "object",
             "properties": {
@@ -278,6 +310,11 @@ class StoreAgentTool:
             },
             "required": ["name", "slug", "description", "raw_content", "metadata"],
         }
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Backward compatibility property for orchestrators expecting input_schema."""
+        return self.get_schema()
 
     async def execute(self, input: dict) -> ToolResult:
         try:
