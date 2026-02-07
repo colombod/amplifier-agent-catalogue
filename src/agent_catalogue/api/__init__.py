@@ -108,8 +108,10 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Register routes
+    from agent_catalogue.api.recipes_routes import router as recipes_router
     from agent_catalogue.api.routes import router
 
     app.include_router(router)
+    app.include_router(recipes_router)
 
     return app
