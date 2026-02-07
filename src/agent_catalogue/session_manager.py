@@ -43,6 +43,7 @@ AGENT_SKILLS: dict[str, list[str]] = {
     "narrator": ["quality-criteria.md", "comparison-methodology.md"],
     "evaluator": ["quality-criteria.md", "agent-anatomy.md"],
     "improver": ["quality-criteria.md", "agent-anatomy.md", "behavior-patterns.md"],
+    "differentiator": ["agent-anatomy.md", "behavior-patterns.md", "domain-taxonomy.md"],
     "discovery": ["domain-taxonomy.md", "agent-anatomy.md"],
     "relevance": ["domain-taxonomy.md", "behavior-patterns.md"],
 }
