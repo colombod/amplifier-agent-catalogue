@@ -84,8 +84,20 @@ class SSEBridge:
 
         Returns list of unregister callables for cleanup.
         """
+        logger.info("=" * 60)
+        logger.info("SSE BRIDGE: register_hooks called")
+        logger.info("  session_id: %s", session.session_id)
+        logger.info("  workflow_id: %s", workflow_id)
+        logger.info("  agent_name: %s", agent_name)
+        logger.info("  has_coordinator: %s", hasattr(session, "coordinator"))
+        logger.info(
+            "  has_hooks: %s",
+            hasattr(session.coordinator, "hooks") if hasattr(session, "coordinator") else False,
+        )
+
         unregisters = []
         registered = []
+        failed = []
 
         async def handler(event: str, data: dict[str, Any]) -> HookResult:
             # Route to the workflow queue
@@ -97,9 +109,12 @@ class SSEBridge:
                 try:
                     serialized = _serialize_event(event, data, agent_name=agent_name)
                     if serialized:
+                        logger.debug("SSE: Putting event %s to queue (workflow=%s)", event, target)
                         await queue.put(serialized)
                 except Exception:
-                    logger.debug("Failed to serialize event %s", event, exc_info=True)
+                    logger.error("Failed to serialize event %s", event, exc_info=True)
+            else:
+                logger.warning("SSE: No queue for workflow %s (event=%s)", target, event)
             return HookResult(action="continue")
 
         for evt in KERNEL_EVENTS:
@@ -109,13 +124,18 @@ class SSEBridge:
                 )
                 unregisters.append(unreg)
                 registered.append(evt)
-            except Exception:
-                logger.debug("Could not register hook for %s", evt, exc_info=True)
+                logger.debug("  ✓ Registered hook: %s", evt)
+            except Exception as e:
+                failed.append(evt)
+                logger.error("  ✗ Failed to register hook %s: %s", evt, e, exc_info=True)
 
-        if registered:
-            logger.debug("SSE bridge registered %d hooks: %s", len(registered), registered)
-        else:
-            logger.warning("SSE bridge: no hooks registered!")
+        logger.info("SSE BRIDGE: Registration complete")
+        logger.info("  Registered: %d events: %s", len(registered), registered[:5])
+        logger.info("  Failed: %d events: %s", len(failed), failed)
+        logger.info("=" * 60)
+
+        if not registered:
+            logger.error("SSE BRIDGE: NO HOOKS REGISTERED! This will break streaming.")
 
         return unregisters
 
@@ -166,20 +186,93 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
 
     if event == "tool:post":
         tool_name = data.get("tool_name", "unknown")
-        tool_result = data.get("tool_result", {})
-        success = tool_result.get("success", False) if isinstance(tool_result, dict) else False
-        output = tool_result.get("output", "") if isinstance(tool_result, dict) else ""
-        # Summarize the output
+        # Orchestrator passes result in 'result' field, not 'tool_result'
+        tool_result = data.get("result", {})
+
+        # COMPREHENSIVE DEBUG
+        logger.info("=" * 60)
+        logger.info("tool:post EVENT SERIALIZATION: %s", tool_name)
+        logger.info("  data keys: %s", list(data.keys()))
+        logger.info("  tool_result type: %s", type(tool_result))
+        if isinstance(tool_result, dict):
+            logger.info("  tool_result keys: %s", list(tool_result.keys()))
+            logger.info("  has 'error': %s", "error" in tool_result)
+            logger.info(
+                "  error VALUE: %r (type=%s)",
+                tool_result.get("error"),
+                type(tool_result.get("error")),
+            )
+            logger.info("  has 'output': %s", "output" in tool_result)
+
+        # ToolResult has success=True by default - only False if error has content
+        if isinstance(tool_result, dict):
+            # Check if error field has actual content, not just if key exists
+            has_error = bool(tool_result.get("error"))
+            success = tool_result.get("success", True) if not has_error else False
+            output = tool_result.get("output", "")
+            logger.info("  success: %s", success)
+            logger.info("  output type: %s", type(output))
+            if isinstance(output, dict):
+                logger.info("  output keys: %s", list(output.keys()))
+                logger.info(
+                    "  output content preview: %s",
+                    {
+                        k: (
+                            v
+                            if not isinstance(v, (list, str)) or len(str(v)) < 50
+                            else f"{type(v).__name__}[{len(v)}]"
+                        )
+                        for k, v in list(output.items())[:5]
+                    },
+                )
+        else:
+            success = False
+            output = ""
+
+        # Build informative summary based on tool output structure
         summary = ""
-        if isinstance(output, list):
-            summary = f"{len(output)} results"
-        elif isinstance(output, dict):
-            if "agent_id" in output:
-                summary = f"agent {output['agent_id'][:8]}..."
+        if isinstance(output, dict):
+            # search_similar returns {"count": N, "agents": [...]}
+            if "count" in output and "agents" in output:
+                count = output.get("count", 0)
+                agents_list = output.get("agents", [])
+                logger.info(
+                    "  → search_similar pattern: count=%d, agents_len=%d", count, len(agents_list)
+                )
+
+                if count == 0:
+                    summary = "no results"
+                elif count == 1 and agents_list:
+                    agent_name = agents_list[0].get("name", "Unknown")
+                    summary = f'found "{agent_name}"'
+                else:
+                    summary = f"found {count} agents"
+            # get_agent_content returns {"agent_name": X, "content": Y, ...}
+            elif "agent_name" in output and "content" in output:
+                name = output.get("agent_name", "Unknown")
+                content_len = len(output.get("content", ""))
+                logger.info(
+                    "  → get_agent_content pattern: name=%s, content_len=%d", name, content_len
+                )
+                summary = f'"{name}" ({content_len} chars)'
+            # Generic dict
             else:
-                summary = f"{len(output)} fields"
+                keys = list(output.keys())
+                summary = f"{len(output)} fields ({', '.join(keys[:3])})"
+                logger.info("  → generic dict: %d keys: %s", len(keys), keys)
+        elif isinstance(output, list):
+            summary = f"{len(output)} items"
         elif isinstance(output, str):
             summary = f"{len(output)} chars"
+        elif not output:
+            summary = "empty output"
+            logger.warning("  → EMPTY OUTPUT!")
+        else:
+            summary = f"type={type(output).__name__}"
+
+        logger.info("  FINAL summary: %r", summary)
+        logger.info("=" * 60)
+
         return {
             "event": "tool:post",
             "data": {
@@ -212,11 +305,32 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
     if event == "content_block:end":
         # This is where the real content lives - the full block
         block = data.get("block", {})
+
+        # DEBUG: Log everything we're receiving
+        logger.info("=" * 80)
+        logger.info("content_block:end - FULL EVENT DATA DUMP:")
+        logger.info("Block type: %s", type(block))
+        logger.info("Block keys: %s", list(block.keys()) if isinstance(block, dict) else "N/A")
+        if isinstance(block, dict):
+            for key, value in block.items():
+                if isinstance(value, str):
+                    logger.info("  block['%s'] = %s... (%d chars)", key, value[:100], len(value))
+                else:
+                    logger.info("  block['%s'] = %s", key, type(value))
+        logger.info("All data keys: %s", list(data.keys()))
+        logger.info("=" * 80)
+
         block_type = block.get("type", "text") if isinstance(block, dict) else "text"
         text = ""
+        thinking = ""
         if isinstance(block, dict):
-            # Extract text content from the block
-            text = block.get("text", "") or block.get("thinking", "") or ""
+            # Extract both text and thinking content from the block
+            text = block.get("text", "")
+            thinking = block.get("thinking", "")
+
+        # Combine text and thinking for display - PREFER thinking if available
+        full_content = thinking if thinking else text
+
         # Also extract usage info if present
         usage = data.get("usage", {})
         return {
@@ -224,9 +338,10 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
             "data": {
                 "block_type": block_type,
                 "block_index": data.get("block_index", 0),
-                "text_preview": str(text)[:3000] if text else "",  # Increased from 500 to 3000
-                "full_text": str(text) if text else "",  # Send full text for detailed viewing
-                "text_length": len(str(text)) if text else 0,
+                "text_preview": str(full_content)[:3000] if full_content else "",
+                "full_text": str(full_content) if full_content else "",
+                "text_length": len(str(full_content)) if full_content else 0,
+                "has_thinking": bool(thinking),
                 "input_tokens": usage.get("input_tokens") if usage else None,
                 "output_tokens": usage.get("output_tokens") if usage else None,
             },
