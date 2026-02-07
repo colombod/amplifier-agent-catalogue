@@ -34,10 +34,9 @@ stages:
           {{content}}
           ```
           
-          **Overlapping agents** (use get_agent_content to read these):
-          {% for agent_id in overlapping_agent_ids %}
-          - {{agent_id}}
-          {% endfor %}
+          **Overlapping agent IDs**: {{overlapping_agent_ids}}
+          
+          Use get_agent_content tool to read each one.
           
           **Your task:**
           1. Use get_agent_content tool to read FULL definitions of each overlapping agent

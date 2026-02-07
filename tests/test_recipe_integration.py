@@ -14,18 +14,19 @@ async def test_recipe_start():
 
     from agent_catalogue.api import create_app
 
+    # TestClient needs to use app lifespan context
     app = create_app()
-    client = TestClient(app)
 
-    # Test data
-    request_body = {
-        "recipe_path": "recipes/differentiate-agent.yaml",
-        "context": {
-            "content": "# Test Agent\n\nA simple test agent.",
-            "overlapping_agent_ids": ["323e483c-f4d1-4676-ad12-a4ad26ea292e"],
-            "attempt_number": 1,
-        },
-    }
+    with TestClient(app) as client:
+        # Test data
+        request_body = {
+            "recipe_path": "recipes/differentiate-agent.yaml",
+            "context": {
+                "content": "# Test Agent\n\nA simple test agent.",
+                "overlapping_agent_ids": ["323e483c-f4d1-4676-ad12-a4ad26ea292e"],
+                "attempt_number": 1,
+            },
+        }
 
     print("\n" + "=" * 80)
     print("TESTING RECIPE START ENDPOINT")

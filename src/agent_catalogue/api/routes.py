@@ -390,6 +390,66 @@ class RecheckResponse(BaseModel):
     has_duplication_risk: bool
 
 
+# --- Recipe Execution Models ---
+
+
+class RecipeStartRequest(BaseModel):
+    """Request to start a recipe execution."""
+
+    recipe_path: str = Field(..., description="Path to recipe YAML file")
+    context: dict[str, Any] = Field(
+        default_factory=dict, description="Context variables for recipe"
+    )
+
+
+class RecipeStartResponse(BaseModel):
+    """Response from recipe start endpoint."""
+
+    session_id: str = Field(..., description="Recipe session identifier")
+    status: str = Field(..., description="Initial status (usually 'running')")
+
+
+class RecipeStatusResponse(BaseModel):
+    """Response from recipe status endpoint."""
+
+    session_id: str
+    status: str = Field(
+        ..., description="running | paused_for_approval | completed | failed"
+    )
+    recipe_name: str | None = None
+    current_stage: str | None = None
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    approval_needed: bool = False
+    pending_approval: dict[str, Any] | None = None
+
+
+class RecipeSessionsResponse(BaseModel):
+    """Response from list recipe sessions endpoint."""
+
+    sessions: list[dict[str, Any]]
+    count: int
+
+
+class RecipeApprovalResponse(BaseModel):
+    """Response from recipe approval endpoint."""
+
+    status: str = Field(..., description="Status after approval (usually 'resumed')")
+    session_id: str
+
+
+class RecipeDenyRequest(BaseModel):
+    """Request to deny a recipe stage."""
+
+    reason: str | None = Field(None, description="Optional reason for denial")
+
+
+class RecipeDenyResponse(BaseModel):
+    """Response from recipe deny endpoint."""
+
+    status: str = Field(..., description="Status after denial (usually 'denied')")
+    session_id: str
+
+
 # ===================================================================
 # Web Routes (HTML)
 # ===================================================================

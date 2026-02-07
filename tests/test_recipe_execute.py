@@ -1,6 +1,5 @@
 """Test recipe execution endpoints with live server."""
 
-
 import requests
 
 SERVER_URL = "http://127.0.0.1:8000"

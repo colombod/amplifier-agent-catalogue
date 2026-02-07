@@ -233,6 +233,63 @@ class SessionManager:
 
     # -- Recipe Execution Sessions --------------------------------------
 
+    async def _create_session(self, session_id: str | None = None) -> AmplifierSession:
+        """Create a temporary session with recipes bundle.
+
+        Used by recipe endpoints to access the recipes tool.
+        This is a lightweight wrapper around create_recipe_session.
+
+        Returns:
+            Initialized AmplifierSession with recipes tool mounted
+        """
+        return await self.create_recipe_session(session_id=session_id)
+
+    def _create_spawn_callback_for_recipes(self):
+        """Create a spawn callback for recipe execution sessions.
+
+        The recipes tool requires a 'session.spawn' capability to delegate work
+        to sub-agents. This method returns a callback that recipes can use.
+
+        Returns:
+            Async function that creates and executes a child session
+        """
+
+        async def spawn_callback(
+            agent_name: str, instruction: str, parent_session, **kwargs
+        ) -> str:
+            """Spawn a child session for recipe sub-agent delegation.
+
+            Args:
+                agent_name: Agent name or bundle path
+                instruction: Instruction to execute
+                parent_session: Parent AmplifierSession
+                **kwargs: Additional arguments from recipes tool (ignored)
+
+            Returns:
+                Response string from the child session
+            """
+            logger.info(
+                "Recipe spawn callback: agent=%s, parent=%s",
+                agent_name,
+                parent_session.session_id,
+            )
+
+            # Create child session from recipes bundle
+            child = await self._create_session_from_bundle(
+                bundle_type="recipes",
+                parent_id=parent_session.session_id,
+            )
+
+            try:
+                # Execute instruction on child
+                response = await child.execute(instruction)
+                return response
+            finally:
+                # Clean up child session
+                await child.cleanup()
+
+        return spawn_callback
+
     async def create_recipe_session(
         self,
         session_id: str | None = None,
