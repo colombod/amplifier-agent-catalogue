@@ -1119,57 +1119,86 @@ async def refine_agent_content(
     request: Request,
     body: RefineRequest,
 ) -> RefineResponse:
-    """Refine content to reduce overlap with existing agents.
+    """Refine content to reduce overlap using strategic differentiation.
 
-    Takes the current content and a list of overlapping agents,
-    rewrites to differentiate more aggressively.
+    Uses the differentiator agent (not improver) which has frameworks for
+    niche-carving: narrow scope, different method, adjacent positioning, etc.
     """
     session_mgr = request.app.state.session_mgr
+    db_repo = request.app.state.db_repo
     content_str = body.content
     overlapping = body.overlapping_agents
 
-    # Build overlap context for LLM
-    agent_lines = []
-    for i, agent in enumerate(overlapping, 1):
-        caps = ", ".join(agent.get("capabilities", [])[:5]) or "none"
-        doms = ", ".join(agent.get("domains", [])[:5]) or "none"
-        tls = ", ".join(agent.get("tools", [])[:5]) or "none"
-        agent_lines.append(
-            f"{i}. **{agent['name']}** — "
-            f"{agent.get('description', 'No description')}\n"
+    # Build detailed overlap context with FULL agent content
+    agent_ids = [agent.get("id") for agent in overlapping if agent.get("id")]
+
+    # Fetch full agent content for strategic analysis
+    full_agents = []
+    for agent_id in agent_ids[:3]:  # Limit to top 3 to avoid token explosion
+        try:
+            agent_uuid = UUID(agent_id)
+            agent_summary = db_repo.get_agent(agent_uuid)
+            metadata = db_repo.get_agent_metadata(agent_uuid)
+            versions = db_repo.get_agent_versions(agent_uuid)
+            latest_content = versions[0].raw_content if versions else ""
+
+            full_agents.append(
+                {
+                    "name": agent_summary.name,
+                    "description": agent_summary.description,
+                    "capabilities": metadata.get("capabilities", []),
+                    "domains": metadata.get("domains", []),
+                    "tools": metadata.get("tools", []),
+                    "full_content": latest_content[:2000],  # First 2000 chars for context
+                }
+            )
+        except Exception:
+            logger.warning("Could not fetch full content for agent %s", agent_id)
+            continue
+
+    # Build strategic refinement prompt
+    agents_detail = []
+    for i, agent in enumerate(full_agents, 1):
+        caps = ", ".join(agent["capabilities"][:5]) or "none"
+        doms = ", ".join(agent["domains"][:5]) or "none"
+        tls = ", ".join(agent["tools"][:5]) or "none"
+        agents_detail.append(
+            f"{i}. **{agent['name']}**\n"
+            f"   Description: {agent['description']}\n"
             f"   Capabilities: {caps}\n"
             f"   Domains: {doms}\n"
-            f"   Tools: {tls}"
+            f"   Tools: {tls}\n"
+            f"   Content preview: {agent['full_content'][:500]}..."
         )
 
-    agents_text = chr(10).join(agent_lines)
+    agents_text = "\n\n".join(agents_detail)
     token_count = count_tokens(content_str)
 
     refine_prompt = (
-        f"Refine this AGENTS.md to reduce overlap with existing agents.\n\n"
+        f"Apply strategic differentiation to reduce overlap.\n\n"
         f"<current_content>\n{content_str}\n</current_content>\n\n"
         f"<overlapping_agents>\n"
-        f"These agents already exist and overlap with the current definition.\n"
-        f"The refined version must CLEARLY DIFFERENTIATE from each.\n\n"
-        f"{agents_text}\n</overlapping_agents>\n\n"
-        f"Your task:\n"
-        f"- Identify which capabilities, domains, or behaviors overlap\n"
-        f"- REMOVE or REFRAME overlapping capabilities\n"
-        f"- SHARPEN the agent's unique niche\n"
-        f"- Add explicit 'Not for' or 'Defers to' statements\n"
-        f"- Narrow scope if needed\n\n"
+        f"These agents overlap significantly. Study their FULL positioning:\n\n"
+        f"{agents_text}\n"
+        f"</overlapping_agents>\n\n"
+        f"Use your differentiation frameworks:\n"
+        f"1. **Narrow Scope**: Focus on subset nobody covers deeply\n"
+        f"2. **Different Method**: Same problem, different approach\n"
+        f"3. **Adjacent Niche**: Related but distinct need\n"
+        f"4. **Unique Combo**: Intersection nobody else covers\n"
+        f"5. **Different Audience**: Specialize for user segment\n\n"
+        f"Apply the MOST APPROPRIATE framework to create clear differentiation.\n\n"
         f"Rules:\n"
-        f"- Preserve the agent's name\n"
-        f"- Keep the core intent but make it clearly distinct\n"
-        f"- Be aggressive about removing overlap\n"
-        f"- TOKEN EFFICIENCY: Current version is {token_count} tokens. "
-        f"Keep it under 1500 tokens. Be concise.\n\n"
-        f"IMPORTANT: Your response must start with the first line of the "
-        f"refined AGENTS.md. Do NOT include any preamble, thinking, "
-        f"explanation, or code fences.\nOutput ONLY raw markdown content."
+        f"- Preserve agent name and core mission\n"
+        f"- Be SPECIFIC about what this agent does NOT do\n"
+        f"- Add 'Defers to' statements referencing overlapping agents by name\n"
+        f"- Remove or reframe any capability that overlaps >50% with existing agents\n"
+        f"- Current: {token_count} tokens. Keep under 1500.\n\n"
+        f"Output ONLY refined AGENTS.md markdown. No preamble, no code fences."
     )
 
-    refined_raw = await session_mgr.run_one_shot("improver", refine_prompt)
+    # Use differentiator agent (has strategic frameworks), not improver
+    refined_raw = await session_mgr.run_one_shot("differentiator", refine_prompt)
     refined = _strip_preamble(refined_raw)
 
     changes = _compute_diff_sections(content_str, refined)
