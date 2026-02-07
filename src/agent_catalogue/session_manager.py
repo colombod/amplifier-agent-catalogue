@@ -276,22 +276,34 @@ class SessionManager:
         system_prompt = self._build_agent_prompt(agent_name)
 
         child = await self._create_session(parent_id=parent.session_id)
+        logger.info("Created child session: %s (parent=%s)", child.session_id, parent.session_id)
 
         # Inject specialist system prompt
         context = child.coordinator.get("context")
         await context.add_message({"role": "system", "content": system_prompt})
 
-        # Mount catalogue tools
+        # Mount catalogue tools WITH VERIFICATION
+        logger.info(
+            "Creating catalogue tools (db_repo=%s, embedder=%s)",
+            type(self._db_repo).__name__,
+            type(self._embedder).__name__,
+        )
         tools = create_catalogue_tools(self._db_repo, self._embedder)
+        logger.info("Created %d tools: %s", len(tools), [t.name for t in tools])
+
         for tool in tools:
+            logger.info("Mounting tool: %s", tool.name)
             await child.coordinator.mount("tools", tool, name=tool.name)
+            logger.info("✓ Mounted tool: %s", tool.name)
 
         # Register SSE hooks (events carry parent_id -> route to parent's queue)
         parent_workflow_id = parent.session_id
         child_unregisters = self.sse_bridge.register_hooks(child, parent_workflow_id)
 
         try:
+            logger.info("Executing instruction on %s...", agent_name)
             response = await child.execute(instruction)
+            logger.info("Specialist %s completed successfully", agent_name)
             return response
         finally:
             for unreg in child_unregisters:
@@ -369,9 +381,12 @@ class SessionManager:
         # Register SSE hooks for real-time streaming
         # Use the session's own ID as the routing key
         sid = session.session_id
+        logger.info("Registering SSE hooks for session %s (agent=%s)", sid, agent_name)
         unregisters = self.sse_bridge.register_hooks(session, sid, agent_name=agent_name)
+        logger.info("SSE hooks registered: %d unregister callbacks", len(unregisters))
         # Point the bridge queue to the caller's event_queue
         self.sse_bridge._queues[sid] = event_queue
+        logger.info("SSE bridge queue mapped for session %s", sid)
 
         try:
             response = await session.execute(instruction)
