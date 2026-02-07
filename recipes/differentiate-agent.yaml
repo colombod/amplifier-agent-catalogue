@@ -2,165 +2,143 @@ name: differentiate-agent
 description: |
   Strategic differentiation workflow for agents with high catalogue overlap.
   
-  Analyzes specific trait conflicts, proposes differentiation strategies,
-  and applies user-selected strategy to carve a unique niche.
+  Analyzes trait conflicts, proposes strategies, and applies the recommended
+  one after user approval checkpoint.
+  
+  NOTE: Recipe approval gates support approve/deny only. For multi-choice
+  strategy selection, use the /api/refine endpoint instead.
 
-version: "1.0"
+version: "1.0.0"
 
 context:
-  # Required: content and overlapping agent IDs
-  content: ""                      # Current AGENTS.md to refine
-  overlapping_agent_ids: []        # UUIDs of agents with high similarity
+  content: ""                      # Required: Current AGENTS.md to refine
+  overlapping_agent_ids: []        # Required: UUIDs of overlapping agents
   
-  # Optional
-  attempt_number: 1                # For tracking if user re-runs
-  previous_similarity: null        # Previous max similarity score
+  # Optional tracking
+  attempt_number: 1
+  previous_similarity: null
 
 stages:
   # ========================================================================
   # Stage 1: Strategic Analysis
   # ========================================================================
-  - name: analyze-and-propose
-    agent: differentiator
-    instruction: |
-      Analyze overlap and propose differentiation strategies.
-      
-      **Current agent to refine:**
-      ```
-      {{content}}
-      ```
-      
-      **Overlapping agents** (IDs to read with get_agent_content):
-      {% for agent_id in overlapping_agent_ids %}
-      - {{agent_id}}
-      {% endfor %}
-      
-      **Your task:**
-      1. Use get_agent_content to read FULL definitions of each overlapping agent
-      2. Identify WHICH specific traits overlap (capabilities, domains, tools)
-      3. Identify positioning gaps in the catalogue
-      4. Apply your differentiation frameworks
-      5. Propose 2-3 strategies with clear reasoning and trade-offs
-      
-      **Output format**: Return JSON only (no markdown):
-      ```json
-      {
-        "overlap_analysis": {
-          "shared_capabilities": ["cap1", "cap2"],
-          "shared_domains": ["domain1"],
-          "shared_tools": ["tool1"],
-          "positioning_gaps": ["gap1", "gap2"],
-          "competitive_landscape": "summary"
-        },
-        "strategies": [
+  - name: strategic-analysis
+    steps:
+      - id: analyze-overlap
+        agent: differentiator
+        prompt: |
+          Analyze overlap and propose differentiation strategies.
+          
+          **Current agent to refine:**
+          ```
+          {{content}}
+          ```
+          
+          **Overlapping agents** (use get_agent_content to read these):
+          {% for agent_id in overlapping_agent_ids %}
+          - {{agent_id}}
+          {% endfor %}
+          
+          **Your task:**
+          1. Use get_agent_content tool to read FULL definitions of each overlapping agent
+          2. Identify WHICH specific traits overlap (capabilities, domains, tools)
+          3. Identify positioning gaps in the catalogue
+          4. Apply your differentiation frameworks (narrow scope, different method, etc.)
+          5. Propose 2-3 strategies with clear reasoning
+          6. Recommend the best strategy
+          
+          **Output format**: Return JSON only:
+          ```json
           {
-            "approach": "narrow_scope",
-            "title": "Specialize in X",
-            "reasoning": "Why this works...",
-            "changes": "Remove A, B. Focus on C...",
-            "expected_outcome": "Reduces overlap from X% to ~Y%",
-            "trade_offs": "Narrower scope but clearer positioning"
+            "overlap_analysis": {
+              "shared_capabilities": ["cap1", "cap2"],
+              "shared_domains": ["domain1"],
+              "shared_tools": ["tool1"],
+              "positioning_gaps": ["gap1", "gap2"],
+              "summary": "High-level competitive landscape"
+            },
+            "strategies": [
+              {
+                "approach": "narrow_scope",
+                "title": "Specialize in X",
+                "reasoning": "Why this differentiates...",
+                "changes": "Remove A, B. Focus on C...",
+                "expected_outcome": "Reduces overlap from X% to ~Y%",
+                "trade_offs": "Narrower scope but clearer value"
+              }
+            ],
+            "recommended_index": 0,
+            "recommended_reasoning": "Why this is best choice..."
           }
-        ],
-        "recommended_index": 0
-      }
-      ```
+          ```
+        parse_json: true
+        output: analysis
+      
+      - id: format-for-approval
+        agent: differentiator
+        prompt: |
+          Format this strategic analysis for user review:
+          
+          {{analysis | tojson}}
+          
+          Create a clear, readable summary showing:
+          1. Overlap conflicts (bullet list)
+          2. Each proposed strategy with pros/cons
+          3. Recommended strategy highlighted
+          
+          Output markdown for display.
+        output: formatted_analysis
+    
+    approval:
+      required: true
+      prompt: |
+        # Differentiation Strategies
+        
+        {{formatted_analysis}}
+        
+        ---
+        
+        **Approve** to apply the recommended strategy.
+        **Deny** to cancel differentiation and keep current version.
+      timeout: 0  # No timeout - wait indefinitely for user
+      default: deny
 
   # ========================================================================
-  # Stage 2: User Selects Strategy (APPROVAL GATE)
+  # Stage 2: Apply Recommended Strategy
   # ========================================================================
-  - name: choose-strategy
-    approval_required: true
-    instruction: |
-      # Select Differentiation Strategy
-      
-      {% if attempt_number > 1 %}
-      **Progress so far**: Attempt {{attempt_number}}
-      {% if previous_similarity %}Previous similarity: {{previous_similarity}}%{% endif %}
-      {% endif %}
-      
-      ## Overlap Analysis
-      
-      {{analyze-and-propose.output.overlap_analysis.competitive_landscape}}
-      
-      **Conflicts**:
-      - Capabilities: {{analyze-and-propose.output.overlap_analysis.shared_capabilities | join(', ')}}
-      - Domains: {{analyze-and-propose.output.overlap_analysis.shared_domains | join(', ')}}
-      
-      **Positioning gaps**: {{analyze-and-propose.output.overlap_analysis.positioning_gaps | join(', ')}}
-      
-      ---
-      
-      ## Proposed Strategies
-      
-      {% for strategy in analyze-and-propose.output.strategies %}
-      ### {{loop.index}}. {{strategy.title}}
-      
-      **Approach**: `{{strategy.approach}}`  
-      **What changes**: {{strategy.changes}}  
-      **Expected outcome**: {{strategy.expected_outcome}}  
-      **Trade-offs**: {{strategy.trade_offs}}  
-      
-      **Reasoning**: {{strategy.reasoning}}
-      
-      {% if loop.index0 == analyze-and-propose.output.recommended_index %}⭐ **Recommended**{% endif %}
-      
-      ---
-      {% endfor %}
-      
-      ## Your Choice
-      
-      Options:
-      - `1`, `2`, or `3` - Apply that strategy
-      - `recommended` - Use recommended strategy ({{analyze-and-propose.output.recommended_index + 1}})
-      - `accept` - Accept current overlap, skip refinement
-      - `cancel` - Cancel and return to upload flow
-      
-      Enter your choice:
-
-  # ========================================================================
-  # Stage 3: Apply Selected Strategy
-  # ========================================================================
-  - name: apply-differentiation
-    agent: differentiator
-    skip_if: "{{choose-strategy.user_input in ['accept', 'cancel']}}"
-    instruction: |
-      Apply the chosen differentiation strategy.
-      
-      <current_content>
-      {{content}}
-      </current_content>
-      
-      <chosen_strategy>
-      {% set choice = choose-strategy.user_input %}
-      {% if choice == 'recommended' %}
-      {% set idx = analyze-and-propose.output.recommended_index %}
-      {% else %}
-      {% set idx = choice | int - 1 %}
-      {% endif %}
-      {{analyze-and-propose.output.strategies[idx] | tojson}}
-      </chosen_strategy>
-      
-      <overlap_context>
-      Shared capabilities: {{analyze-and-propose.output.overlap_analysis.shared_capabilities | join(', ')}}
-      Shared domains: {{analyze-and-propose.output.overlap_analysis.shared_domains | join(', ')}}
-      </overlap_context>
-      
-      **Instructions**:
-      1. Parse the current agent definition
-      2. Apply the strategy changes precisely:
-         - If narrow_scope: REMOVE listed capabilities, deepen focus area
-         - If different_method: REFRAME approach while keeping problem domain
-         - If adjacent_niche: SHIFT to related but distinct use case
-         - If unique_combo: EMPHASIZE unique capability intersection
-         - If different_audience: SPECIALIZE for user segment
-      3. Add explicit "Not for" and "Defers to" statements referencing overlapping agents
-      4. Preserve agent name and core mission
-      5. Keep under 1500 tokens
-      
-      **Output**: ONLY the refined AGENTS.md markdown. No preamble, no code fences, no explanation.
-      
-      Start directly with # heading.
-
-# Final output is the refined content from apply-differentiation stage
-output: "{{apply-differentiation.output if choose-strategy.user_input not in ['accept', 'cancel'] else content}}"
+  - name: strategy-application
+    steps:
+      - id: apply-recommended-strategy
+        agent: differentiator
+        prompt: |
+          Apply the recommended differentiation strategy.
+          
+          <current_content>
+          {{content}}
+          </current_content>
+          
+          <overlap_analysis>
+          Shared capabilities: {{analysis.overlap_analysis.shared_capabilities | join(', ')}}
+          Shared domains: {{analysis.overlap_analysis.shared_domains | join(', ')}}
+          Positioning gaps: {{analysis.overlap_analysis.positioning_gaps | join(', ')}}
+          </overlap_analysis>
+          
+          <chosen_strategy>
+          {% set idx = analysis.recommended_index %}
+          Title: {{analysis.strategies[idx].title}}
+          Approach: {{analysis.strategies[idx].approach}}
+          Changes: {{analysis.strategies[idx].changes}}
+          Expected outcome: {{analysis.strategies[idx].expected_outcome}}
+          Reasoning: {{analysis.strategies[idx].reasoning}}
+          </chosen_strategy>
+          
+          **Instructions**:
+          1. Apply the strategy changes precisely
+          2. Add explicit "Not for" and "Defers to" sections
+          3. Remove or reframe overlapping capabilities
+          4. Emphasize unique positioning
+          5. Keep under 1500 tokens
+          
+          **Output**: ONLY the refined AGENTS.md markdown. No preamble, no code fences.
+          Start with # heading.
+        output: refined_content
