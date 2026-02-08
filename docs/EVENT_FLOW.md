@@ -2,6 +2,8 @@
 
 This document explains how the Agent Catalogue uses Amplifier's event system for real-time UI updates.
 
+**Part of**: [Architecture Documentation](ARCHITECTURE.md) - See that doc for complete system overview
+
 ## Overview
 
 The application uses **SSE (Server-Sent Events)** to stream Amplifier kernel events from backend agent sessions to the web frontend, providing real-time visibility into:
@@ -402,6 +404,12 @@ Each event emission calls all registered hooks synchronously. With comprehensive
 3. **Event Compression**: Batch rapid-fire events (e.g., token deltas)
 4. **Workflow Multiplexing**: Multiple workflows on one SSE connection
 5. **Event Persistence**: Store events for post-hoc analysis
+
+## Related Documentation
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system architecture
+- **[API.md](API.md)** - REST API and streaming endpoints
+- **[USER_GUIDE.md](USER_GUIDE.md)** - User workflows and features
 
 ## Reference
 

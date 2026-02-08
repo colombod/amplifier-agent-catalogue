@@ -256,16 +256,34 @@ pyright src/ tests/
 
 ## Documentation
 
+### Essential Docs
+
 | Doc | Purpose |
 |-----|---------|
-| `README.md` | This file - project overview |
-| `docs/DIFFERENTIATION_SYSTEM.md` | Architecture & design |
-| `docs/DIFFERENTIATION_PATTERNS.md` | Pattern 1 vs Pattern 2 comparison |
-| `docs/RECIPE_INTEGRATION.md` | Recipe endpoint implementation |
-| `docs/EVENT_FLOW.md` | SSE event architecture |
-| `docs/INTEGRATION_SUMMARY.md` | Executive summary |
-| `PATTERN2_COMPLETE.md` | Pattern 2 implementation notes |
-| `TEST_RESULTS.md` | Test verification results |
+| **[README.md](README.md)** | Project overview (this file) |
+| **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** | How to use the web interface |
+| **[docs/API.md](docs/API.md)** | Complete API reference |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | System design & technical details |
+
+### Technical Details
+
+| Doc | Purpose |
+|-----|---------|
+| **[docs/DIFFERENTIATION_PATTERNS.md](docs/DIFFERENTIATION_PATTERNS.md)** | Pattern 1 vs 2 comparison |
+| **[docs/EVENT_FLOW.md](docs/EVENT_FLOW.md)** | SSE event architecture |
+| **[tests/README.md](tests/)** | Testing guide |
+
+### Context Files (for agents)
+
+| Directory | Purpose |
+|-----------|---------|
+| **[agents/](agents/)** | 9 specialist agent definitions |
+| **[context/](context/)** | Knowledge files loaded by agents |
+| **[recipes/](recipes/)** | Multi-step workflow definitions |
+
+### Archive
+
+Historical implementation notes and superseded documentation in **[docs/archive/](docs/archive/)**
 
 ---
 
