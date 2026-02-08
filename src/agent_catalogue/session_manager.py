@@ -128,13 +128,13 @@ class SessionManager:
         return self._prepared_bundles["recipes"]
 
     def _create_override_bundle(self) -> Bundle:
-        """Create override bundle with custom providers and session config.
+        """Create override bundle with custom providers ONLY.
 
         Only includes app-specific configuration:
         - Custom providers (Azure, Anthropic) from settings.yaml
-        - Session preferences (orchestrator, context, default provider)
 
         Does NOT include:
+        - Session config (use recipes/foundation defaults)
         - tool-recipes (comes from @recipes)
         - Foundation tools (come via @recipes -> foundation)
         """
@@ -159,32 +159,10 @@ class SessionManager:
 
             providers.append(provider_config)
 
-        # Find active provider (priority=1)
-        active_provider = next(
-            (p.module for p in self._config.providers if p.is_active),
-            self._config.providers[0].module if self._config.providers else None,
-        )
-
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
-            session={
-                "orchestrator": {
-                    "module": "loop-streaming",
-                    "config": {
-                        "max_iterations": 15,
-                    },
-                },
-                "context": {
-                    "module": "context-simple",
-                    "config": {
-                        "max_tokens": 200_000,
-                        "compact_threshold": 0.85,
-                    },
-                },
-                "default_provider": active_provider,
-            },
         )
 
     # -- Session Creation -----------------------------------------------
@@ -211,21 +189,13 @@ class SessionManager:
             raise ValueError(f"Unknown bundle type: {bundle_type}")
 
         # Get mount plan from prepared bundle
+        # prepare() already handled module resolution including tool-recipes
         mount_plan = prepared_bundle.to_mount_plan()
         logger.info(
             "Mount plan has %d providers, %d tools",
             len(mount_plan.get("providers", [])),
             len(mount_plan.get("tools", [])),
         )
-
-        # Register bundle as module source so embedded modules (tool-recipes) can be found
-        from amplifier_foundation.bundle import BundleModuleSource
-
-        resolver = BundleModuleSource(prepared_bundle)
-        if "capabilities" not in mount_plan:
-            mount_plan["capabilities"] = {}
-        mount_plan["capabilities"]["module-source-resolver"] = resolver
-        logger.info("Registered bundle module source for embedded modules")
 
         # Create and initialize session with the composed mount plan
         session = AmplifierSession(
