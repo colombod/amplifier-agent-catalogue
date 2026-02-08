@@ -1007,7 +1007,7 @@ async def stream_analyze_agent(
 
             document = _parser.parse(content_str)
             existing = db_repo.find_by_content_hash(document.content_hash)
-            
+
             if existing:
                 agent = db_repo.get_agent(existing.agent_id)
                 await _emit(
@@ -1066,11 +1066,13 @@ async def stream_analyze_agent(
                 queue,
             )
             classification = _extract_json(classification_response)
-            
+
             if classification:
                 # Merge classification into metadata
                 if "tags" in classification:
-                    metadata.keywords = list(set(metadata.keywords + classification.get("tags", [])))
+                    metadata.keywords = list(
+                        set(metadata.keywords + classification.get("tags", []))
+                    )
                 if "primary_domain" in classification:
                     pd = classification["primary_domain"]
                     if pd and pd not in metadata.domains:
@@ -1119,7 +1121,9 @@ async def stream_analyze_agent(
             )
 
             highest_similarity = max((s.similarity_score for s in similar_agents), default=0.0)
-            has_significant_overlap = any(s.comparison.has_significant_overlap for s in similar_agents)
+            has_significant_overlap = any(
+                s.comparison.has_significant_overlap for s in similar_agents
+            )
 
             logger.info("Stream analyze: found %d similar agents", len(similar_agents))
             if similar_agents:
@@ -1156,8 +1160,8 @@ async def stream_analyze_agent(
                                 "has_significant_overlap": s.comparison.has_significant_overlap,
                                 "capabilities": {
                                     "shared": s.comparison.capabilities.shared,
-                                    "unique_to_new": s.comparison.capabilities.unique_to_new,
-                                    "unique_to_existing": s.comparison.capabilities.unique_to_existing,
+                                    "only_in_new": s.comparison.capabilities.only_in_new,
+                                    "only_in_existing": s.comparison.capabilities.only_in_existing,
                                 },
                             },
                         }
