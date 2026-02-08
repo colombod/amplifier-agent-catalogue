@@ -115,8 +115,8 @@ class SessionManager:
             # 2. Create override bundle with custom app config
             override = self._create_override_bundle()
 
-            # 3. Compose recipes + override (override must come LAST to win)
-            composed = override.compose(recipes_bundle)
+            # 3. Compose recipes + override
+            composed = recipes_bundle.compose(override)
             logger.info("Composed bundle with custom providers")
 
             # 4. Prepare (download/install modules) - cache this result
