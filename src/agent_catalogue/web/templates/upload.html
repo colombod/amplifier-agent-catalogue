@@ -2661,6 +2661,17 @@ function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
         percentageEl.textContent = (highestSimilarity * 100).toFixed(0);
     }
     
+    // CRITICAL: Store overlap agents for pattern buttons to use
+    window._lastOverlapAgents = similarAgents.map(s => ({
+        id: s.agent.id,
+        name: s.agent.name,
+        description: s.agent.description || '',
+        capabilities: s.agent.capabilities || [],
+        domains: s.agent.domains || [],
+        tools: [],
+        similarity_score: s.similarity_score,
+    }));
+    
     // Build overlap summary
     const topAgents = similarAgents.slice(0, 3);
     const summaryHtml = `
