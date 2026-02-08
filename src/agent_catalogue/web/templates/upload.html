@@ -1098,6 +1098,7 @@
 <script>
 let analysisData = null;
 let uploadedFile = null;
+let originalContent = null;  // Store original file content
 let highestSimilarity = 0;
 let comparedAgents = {};  // Store comparison results by agent ID
 let lastComparedAgentId = null;
@@ -1291,6 +1292,7 @@ function displayAnalysis(data) {
             s => s.comparison && s.comparison.recommendation === 'likely_duplicate'
         );
         const needsReview = hasTraitOverlap || hasLikelyDuplicate || highestSimilarity >= 0.85;
+        const shouldOfferEarlyDiff = highestSimilarity >= 0.70;  // Lower threshold for early gate
         
         if (needsReview) {
             // Genuine duplication risk: require review
@@ -1300,6 +1302,14 @@ function displayAnalysis(data) {
             document.getElementById('step-3-actions').classList.add('hidden');
             
             // Step 4+5 stay disabled until comparison done or skipped
+            setStepState(4, 'disabled');
+            setStepState(5, 'disabled');
+        } else if (shouldOfferEarlyDiff) {
+            // Moderate overlap (70-84%): offer early differentiation choice
+            showEarlyDifferentiationGate(data.similar_agents, highestSimilarity);
+            setStepState(3, 'completed');
+            
+            // Don't auto-proceed - wait for user choice
             setStepState(4, 'disabled');
             setStepState(5, 'disabled');
         } else {
@@ -2398,6 +2408,100 @@ function handleStrategyComplete(refinedContent) {
     
     // Recheck duplication
     recheckDuplication(refinedContent);
+}
+
+// Early differentiation gate handlers
+function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
+    const gateEl = document.getElementById('early-diff-gate');
+    const summaryEl = document.getElementById('overlap-summary');
+    
+    // Build overlap summary
+    const topAgents = similarAgents.slice(0, 3);
+    const summaryHtml = `
+        <p>Your agent overlaps ${(highestSimilarity * 100).toFixed(0)}% with existing agents:</p>
+        <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+            ${topAgents.map(s => `
+                <li style="margin: 0.25rem 0;">
+                    <strong>${s.agent.name}</strong> 
+                    (${(s.similarity_score * 100).toFixed(0)}% similar)
+                    ${s.agent.capabilities ? 
+                        `<br><span style="font-size: 0.85em; color: var(--text-muted);">Shared: ${s.agent.capabilities.slice(0, 3).join(', ')}${s.agent.capabilities.length > 3 ? ', ...' : ''}</span>` 
+                        : ''}
+                </li>
+            `).join('')}
+        </ul>
+    `;
+    
+    summaryEl.innerHTML = summaryHtml;
+    gateEl.classList.remove('hidden');
+    
+    // Hide compare prompt since we're showing differentiation gate
+    document.getElementById('compare-prompt').classList.add('hidden');
+}
+
+document.getElementById('differentiate-early-btn').addEventListener('click', () => {
+    // Hide the gate
+    document.getElementById('early-diff-gate').classList.add('hidden');
+    
+    // Mark Step 3 complete
+    setStepState(3, 'completed');
+    
+    // Skip Steps 4 (Quality Evaluation) - mark as skipped
+    setStepState(4, 'skipped');
+    setStepSummary(4, 'Skipped - differentiation prioritized');
+    document.getElementById('step-4-card').classList.add('completed');
+    
+    // Jump to Step 5 and show differentiation options immediately
+    enableStep5WithDifferentiation();
+});
+
+document.getElementById('continue-quality-btn').addEventListener('click', () => {
+    // Hide the gate
+    document.getElementById('early-diff-gate').classList.add('hidden');
+    
+    // Proceed normally to quality evaluation
+    setStepState(3, 'completed');
+    enableStep4();
+});
+
+function enableStep5WithDifferentiation() {
+    // Go directly to Step 5 with differentiation options visible
+    setStepState(5, 'active');
+    document.getElementById('step-5-empty').classList.add('hidden');
+    document.getElementById('step-5-content').classList.remove('hidden');
+    
+    // Show decision display with differentiation recommendation
+    document.getElementById('decision-display').innerHTML = `
+        <div class="decision-box info">
+            <div class="decision-title">Ready for Differentiation</div>
+            <div>Skipped quality check to prioritize differentiation. Use one of the patterns below to reduce overlap.</div>
+        </div>
+    `;
+    
+    setStepSummary(5, 'Ready for differentiation');
+    
+    // Enable store button but make differentiation more prominent
+    document.getElementById('store-btn').disabled = false;
+    document.getElementById('store-btn').textContent = 'Store Without Differentiating';
+    document.getElementById('store-btn').classList.remove('btn-primary');
+    
+    // Show both differentiation buttons prominently
+    document.getElementById('refine-overlap-btn').style.display = '';
+    document.getElementById('strategic-diff-btn').style.display = '';
+    
+    // Make improved content available (use original since we skipped improvement)
+    improvedContent = originalContent;
+    
+    // Store overlap agents for differentiation
+    window._lastOverlapAgents = analysisData.similar_agents.map(s => ({
+        id: s.agent.id,
+        name: s.agent.name,
+        description: s.agent.description || '',
+        capabilities: s.agent.capabilities || [],
+        domains: s.agent.domains || [],
+        tools: [],
+        similarity_score: s.similarity_score,
+    }));
 }
 
 // Cancel upload button
