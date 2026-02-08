@@ -212,9 +212,10 @@ class SessionManager:
 
         # Get mount plan from prepared bundle
         mount_plan = prepared_bundle.to_mount_plan()
-        
+
         # Register bundle as module source so embedded modules (tool-recipes) can be found
         from amplifier_foundation.bundle import BundleModuleSource
+
         resolver = BundleModuleSource(prepared_bundle)
         if "capabilities" not in mount_plan:
             mount_plan["capabilities"] = {}
