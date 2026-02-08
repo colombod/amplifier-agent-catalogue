@@ -350,6 +350,63 @@
         line-height: 1.5;
     }
     
+    /* Differentiation Pattern Picker */
+    .pattern-picker {
+        margin: 1.5rem 0;
+        padding: 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        background: linear-gradient(135deg, rgba(88, 166, 255, 0.1), rgba(58, 126, 235, 0.05));
+    }
+    
+    .picker-header h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1.1rem;
+    }
+    
+    .picker-subtitle {
+        color: var(--text-muted);
+        margin-bottom: 1.5rem;
+    }
+    
+    .pattern-options {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .pattern-card {
+        padding: 1.25rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+    }
+    
+    .pattern-card h5 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1rem;
+    }
+    
+    .pattern-card p {
+        font-size: 0.9rem;
+        color: var(--text-muted);
+        margin-bottom: 0.75rem;
+        line-height: 1.4;
+    }
+    
+    .pattern-duration {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        font-style: italic;
+    }
+    
+    .picker-actions {
+        text-align: center;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+    }
+    
     .decision-box.warning {
         background: rgba(210, 153, 34, 0.1);
         border: 1px solid var(--warning);
@@ -1017,18 +1074,46 @@
                     <div class="gate-actions">
                         <button class="btn btn-primary" id="differentiate-early-btn">
                             <span class="btn-label">Differentiate Now</span>
-                            <span class="btn-subtitle">Skip quality check, reduce overlap first</span>
+                            <span class="btn-subtitle">Choose pattern, reduce overlap, then quality check</span>
                         </button>
                         <button class="btn btn-secondary" id="continue-quality-btn">
                             <span class="btn-label">Continue to Quality Check</span>
-                            <span class="btn-subtitle">Improve quality first, then address overlap</span>
+                            <span class="btn-subtitle">Analyze quality first, address overlap later</span>
                         </button>
                     </div>
                     
                     <details class="gate-rationale">
                         <summary>Why differentiate now?</summary>
-                        <p>With high overlap, this agent may duplicate existing functionality. Differentiating first saves time by positioning your agent uniquely before quality refinement.</p>
+                        <p>With high overlap, differentiating BEFORE quality analysis lets you refine what makes your agent unique, then polish that differentiated version.</p>
                     </details>
+                </div>
+                
+                <!-- Differentiation Pattern Picker (shown when user clicks Differentiate Now) -->
+                <div class="pattern-picker hidden" id="pattern-picker">
+                    <div class="picker-header">
+                        <h4>Choose Differentiation Approach</h4>
+                        <p class="picker-subtitle">Both patterns will reduce overlap, then you'll proceed to quality analysis</p>
+                    </div>
+                    
+                    <div class="pattern-options">
+                        <div class="pattern-card">
+                            <h5>Pattern 1: Quick Refinement</h5>
+                            <p>AI removes overlapping capabilities and sharpens unique value</p>
+                            <p class="pattern-duration">~15-20 seconds</p>
+                            <button class="btn btn-primary" id="pattern1-btn">Use Pattern 1</button>
+                        </div>
+                        
+                        <div class="pattern-card">
+                            <h5>Pattern 2: Strategic Analysis</h5>
+                            <p>Recipe-based: analyzes overlap, proposes multiple differentiation strategies for your review</p>
+                            <p class="pattern-duration">~30-60 seconds (includes approval step)</p>
+                            <button class="btn btn-accent" id="pattern2-btn">Use Pattern 2</button>
+                        </div>
+                    </div>
+                    
+                    <div class="picker-actions">
+                        <button class="btn btn-ghost" id="cancel-diff-btn">← Back to Gate</button>
+                    </div>
                 </div>
 
                 <!-- Action buttons after comparison -->
@@ -1407,7 +1492,11 @@ function displayAnalysis(data) {
         } else if (shouldOfferEarlyDiff) {
             // Moderate overlap (70-84%): offer early differentiation choice
             showEarlyDifferentiationGate(data.similar_agents, highestSimilarity);
-            setStepState(3, 'completed');
+            setStepState(3, 'active');  // Keep active, not completed yet
+            
+            // Force Step 3 to stay expanded to show similar agents
+            const step3Card = document.getElementById('step-3-card');
+            step3Card.classList.remove('collapsed');
             
             // Don't auto-proceed - wait for user choice
             setStepState(4, 'disabled');
@@ -2599,30 +2688,123 @@ function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
     
     // Attach fresh listeners
     document.getElementById('differentiate-early-btn').addEventListener('click', () => {
-        // Hide the gate
+        // Hide the gate, show pattern picker
         document.getElementById('early-diff-gate').classList.add('hidden');
+        document.getElementById('pattern-picker').classList.remove('hidden');
         
-        // Mark Step 3 complete
-        setStepState(3, 'completed');
-        
-        // Skip Steps 4 (Quality Evaluation) - mark as skipped
-        setStepState(4, 'skipped');
-        setStepSummary(4, 'Skipped - differentiation prioritized');
-        document.getElementById('step-4-card').classList.add('completed');
-        
-        // Jump to Step 5 and show differentiation options immediately
-        enableStep5WithDifferentiation();
+        // Step 3 stays active (pattern selection is part of Step 3)
     });
     
     document.getElementById('continue-quality-btn').addEventListener('click', () => {
         // Hide the gate
         document.getElementById('early-diff-gate').classList.add('hidden');
         
-        // Proceed normally to quality evaluation
+        // Proceed normally to quality evaluation (skip differentiation)
         setStepState(3, 'completed');
         enableStep4();
     });
 }
+
+// Pattern picker handlers
+document.getElementById('pattern1-btn').addEventListener('click', async () => {
+    if (!originalContent || !window._lastOverlapAgents) return;
+    
+    // Hide picker
+    document.getElementById('pattern-picker').classList.add('hidden');
+    
+    // Show loading in Step 3
+    setStepSummary(3, 'Refining to reduce overlap...');
+    
+    // Run Pattern 1 (Quick Refine)
+    try {
+        const response = await fetch('/api/refine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content: originalContent,
+                overlapping_agents: window._lastOverlapAgents
+            })
+        });
+        
+        if (!response.ok) throw new Error('Refinement failed');
+        
+        const data = await response.json();
+        improvedContent = data.refined_content;
+        
+        // Mark Step 3 complete, proceed to quality analysis on refined content
+        setStepState(3, 'completed');
+        setStepSummary(3, 'Differentiated (Pattern 1)');
+        
+        // Proceed to Step 4 with differentiated content
+        enableStep4();
+        
+    } catch (error) {
+        setStepSummary(3, 'Refinement failed');
+        alert(`Pattern 1 failed: ${error.message}. Please try again or choose Pattern 2.`);
+        // Show picker again
+        document.getElementById('pattern-picker').classList.remove('hidden');
+    }
+});
+
+document.getElementById('pattern2-btn').addEventListener('click', async () => {
+    if (!originalContent || !window._lastOverlapAgents) return;
+    
+    // Hide picker
+    document.getElementById('pattern-picker').classList.add('hidden');
+    
+    // Show loading in Step 3
+    setStepSummary(3, 'Strategic differentiation...');
+    
+    // Run Pattern 2 (Strategic)
+    try {
+        const overlappingAgentIds = window._lastOverlapAgents.map(a => a.id);
+        
+        const response = await fetch('/api/recipe/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                recipe_path: 'recipes/differentiate-agent.yaml',
+                context: {
+                    content: originalContent,
+                    overlapping_agent_ids: overlappingAgentIds,
+                    attempt_number: 1
+                }
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) throw new Error(result.detail || 'Recipe failed');
+        
+        window._recipeSessionId = result.session_id;
+        window._recipeStage = result.stage_name;
+        
+        // If paused for approval, show strategy modal
+        if (result.status === 'paused') {
+            document.getElementById('strategy-content').innerHTML =
+                `<div style="white-space: pre-wrap; font-family: monospace; padding: 1rem; background: var(--bg-secondary); border-radius: 4px; max-height: 400px; overflow-y: auto;">${result.approval_prompt}</div>`;
+            document.getElementById('strategy-approval-modal').classList.remove('hidden');
+        } else if (result.status === 'completed') {
+            // Recipe completed, proceed to quality
+            improvedContent = result.summary?.refined_content || originalContent;
+            setStepState(3, 'completed');
+            setStepSummary(3, 'Differentiated (Pattern 2)');
+            enableStep4();
+        }
+        
+    } catch (error) {
+        setStepSummary(3, 'Strategic differentiation failed');
+        alert(`Pattern 2 failed: ${error.message}. Please try again or use Pattern 1.`);
+        // Show picker again
+        document.getElementById('pattern-picker').classList.remove('hidden');
+    }
+});
+
+document.getElementById('cancel-diff-btn').addEventListener('click', () => {
+    // Hide picker, show gate again
+    document.getElementById('pattern-picker').classList.add('hidden');
+    document.getElementById('early-diff-gate').classList.remove('hidden');
+});
 
 function enableStep5WithDifferentiation() {
     // Go directly to Step 5 with differentiation options visible
