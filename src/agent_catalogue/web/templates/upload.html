@@ -1014,6 +1014,9 @@
                         <button class="btn" id="refine-overlap-btn" style="display: none;">
                             Refine to Reduce Overlap
                         </button>
+                        <button class="btn btn-accent" id="strategic-diff-btn" style="display: none;">
+                            Strategic Differentiation
+                        </button>
                         <button class="btn" id="store-original-btn">
                             Store Original Version
                         </button>
@@ -1065,6 +1068,27 @@
             <button class="btn-close" id="close-modal">&times;</button>
         </div>
         <div class="modal-body" id="diff-container"></div>
+    </div>
+</div>
+
+<!-- Strategic Differentiation Approval Modal -->
+<div class="modal-overlay hidden" id="strategy-approval-modal">
+    <div class="modal-content" style="max-width: 700px;">
+        <div class="modal-header">
+            <h3>Review Differentiation Strategies</h3>
+            <button class="btn-close" id="close-strategy-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="strategy-content"></div>
+            <div class="action-buttons" style="margin-top: 2rem; gap: 1rem;">
+                <button class="btn btn-primary" id="approve-strategy-btn">
+                    Apply Recommended Strategy
+                </button>
+                <button class="btn" id="deny-strategy-btn" style="color: var(--text-muted);">
+                    Cancel
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -1852,9 +1876,11 @@ async function recheckDuplication(content) {
             const topName = data.similar_agents[0]?.agent?.name || 'existing agents';
             statusEl.innerHTML = `${pct}% overlap with "${topName}". You can refine further to reduce overlap.`;
 
-            // Show refine button and store overlap data for the refine call
+            // Show both differentiation buttons and store overlap data
             document.getElementById('refine-overlap-btn').style.display = '';
+            document.getElementById('strategic-diff-btn').style.display = '';
             window._lastOverlapAgents = data.similar_agents.map(s => ({
+                id: s.agent.id,
                 name: s.agent.name,
                 description: s.agent.description || '',
                 capabilities: s.agent.capabilities || [],
@@ -1866,6 +1892,7 @@ async function recheckDuplication(content) {
             statusEl.classList.add('clear');
             statusEl.innerHTML = 'No duplication risk. Ready to store.';
             document.getElementById('refine-overlap-btn').style.display = 'none';
+            document.getElementById('strategic-diff-btn').style.display = 'none';
         }
 
     } catch (error) {
@@ -2172,6 +2199,206 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
             `Refinement error: ${error.message}. You can still store the current version.`;
     }
 });
+
+// Strategic Differentiation button (Pattern 2 - Recipe-based)
+document.getElementById('strategic-diff-btn').addEventListener('click', async function() {
+    if (!improvedContent || !window._lastOverlapAgents) return;
+
+    // Show loading, hide actions
+    document.getElementById('improve-actions').classList.add('hidden');
+    document.getElementById('refine-loading').classList.remove('hidden');
+    document.getElementById('refine-progress').textContent = 'Starting strategic analysis...';
+
+    try {
+        // Extract agent IDs from overlapping agents
+        const overlappingAgentIds = window._lastOverlapAgents.map(a => a.id);
+
+        // Start recipe execution
+        const response = await fetch('/api/recipe/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                recipe_path: 'recipes/differentiate-agent.yaml',
+                context: {
+                    content: improvedContent,
+                    overlapping_agent_ids: overlappingAgentIds,
+                    attempt_number: 1
+                }
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Recipe execution failed');
+        }
+
+        // Store session ID and stage for later
+        window._recipeSessionId = result.session_id;
+        window._recipeStage = result.stage_name;
+
+        // Check if paused for approval
+        if (result.status === 'paused') {
+            // Hide loading
+            document.getElementById('refine-loading').classList.add('hidden');
+            
+            // Show approval dialog with strategies
+            document.getElementById('strategy-content').innerHTML = 
+                `<div style="white-space: pre-wrap; font-family: monospace; padding: 1rem; background: var(--bg-secondary); border-radius: 4px; max-height: 400px; overflow-y: auto;">${result.approval_prompt}</div>`;
+            document.getElementById('strategy-approval-modal').classList.remove('hidden');
+        } else if (result.status === 'completed') {
+            // Recipe completed without approval gate
+            handleStrategyComplete(result.summary?.refined_content || improvedContent);
+        }
+
+    } catch (error) {
+        document.getElementById('refine-loading').classList.add('hidden');
+        document.getElementById('improve-actions').classList.remove('hidden');
+        alert(`Strategic differentiation error: ${error.message}`);
+    }
+});
+
+// Approve strategy button
+document.getElementById('approve-strategy-btn').addEventListener('click', async function() {
+    const sessionId = window._recipeSessionId;
+    const stageName = window._recipeStage;
+    
+    if (!sessionId || !stageName) return;
+
+    // Close modal, show loading
+    document.getElementById('strategy-approval-modal').classList.add('hidden');
+    document.getElementById('refine-loading').classList.remove('hidden');
+    document.getElementById('refine-progress').textContent = 'Applying recommended strategy...';
+
+    try {
+        // Approve and resume
+        const response = await fetch('/api/recipe/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: sessionId,
+                stage_name: stageName,
+                action: 'approve'
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Approval failed');
+        }
+
+        // Poll for completion
+        await pollRecipeCompletion(sessionId);
+
+    } catch (error) {
+        document.getElementById('refine-loading').classList.add('hidden');
+        document.getElementById('improve-actions').classList.remove('hidden');
+        alert(`Strategy application error: ${error.message}`);
+    }
+});
+
+// Deny strategy button
+document.getElementById('deny-strategy-btn').addEventListener('click', async function() {
+    const sessionId = window._recipeSessionId;
+    const stageName = window._recipeStage;
+    
+    // Close modal
+    document.getElementById('strategy-approval-modal').classList.add('hidden');
+    document.getElementById('refine-loading').classList.add('hidden');
+    document.getElementById('improve-actions').classList.remove('hidden');
+
+    if (sessionId && stageName) {
+        // Send deny to cleanup the session
+        try {
+            await fetch('/api/recipe/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    stage_name: stageName,
+                    action: 'deny',
+                    reason: 'User cancelled'
+                })
+            });
+        } catch (error) {
+            console.error('Error denying strategy:', error);
+        }
+    }
+});
+
+// Close strategy modal
+document.getElementById('close-strategy-modal').addEventListener('click', () => {
+    document.getElementById('strategy-approval-modal').classList.add('hidden');
+    document.getElementById('refine-loading').classList.add('hidden');
+    document.getElementById('improve-actions').classList.remove('hidden');
+});
+
+// Poll for recipe completion
+async function pollRecipeCompletion(sessionId) {
+    const maxAttempts = 60; // 60 * 2 seconds = 2 minutes max
+    let attempts = 0;
+
+    return new Promise((resolve, reject) => {
+        const pollInterval = setInterval(async () => {
+            attempts++;
+
+            if (attempts > maxAttempts) {
+                clearInterval(pollInterval);
+                reject(new Error('Recipe execution timed out'));
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/recipe/status/${sessionId}`);
+                const status = await response.json();
+
+                if (status.status === 'completed') {
+                    clearInterval(pollInterval);
+                    
+                    // Get refined content from outputs
+                    const refinedContent = status.outputs?.refined_content;
+                    if (refinedContent) {
+                        handleStrategyComplete(refinedContent);
+                    }
+                    resolve();
+                } else if (status.status === 'failed') {
+                    clearInterval(pollInterval);
+                    reject(new Error('Recipe execution failed'));
+                } else if (status.approval_needed) {
+                    // Another approval gate - shouldn't happen with current recipe
+                    clearInterval(pollInterval);
+                    reject(new Error('Unexpected approval gate encountered'));
+                }
+            } catch (error) {
+                clearInterval(pollInterval);
+                reject(error);
+            }
+        }, 2000); // Poll every 2 seconds
+    });
+}
+
+// Handle completed strategy application
+function handleStrategyComplete(refinedContent) {
+    document.getElementById('refine-loading').classList.add('hidden');
+    
+    // Update improved content
+    improvedContent = refinedContent;
+    
+    // Display the refined content
+    document.getElementById('improve-content-display').innerHTML = 
+        `<pre style="white-space: pre-wrap; background: var(--bg-secondary); padding: 1rem; border-radius: 4px; max-height: 400px; overflow-y: auto;">${escapeHtml(refinedContent)}</pre>`;
+    
+    // Show actions
+    document.getElementById('improve-actions').classList.remove('hidden');
+    
+    // Hide refine buttons (differentiation complete)
+    document.getElementById('refine-overlap-btn').style.display = 'none';
+    document.getElementById('strategic-diff-btn').style.display = 'none';
+    
+    // Recheck duplication
+    recheckDuplication(refinedContent);
+}
 
 // Cancel upload button
 document.getElementById('cancel-upload-btn').addEventListener('click', () => {
