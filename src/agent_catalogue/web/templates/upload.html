@@ -1990,38 +1990,73 @@ function renderSimilarAgent(similar) {
     `;
 }
 
-// Deep comparison
+// Deep comparison with SSE progress updates
 async function deepCompare(agentId, agentName) {
-    if (!uploadedFile) return;
-    
-    const formData = new FormData();
-    formData.append('file', uploadedFile);
+    if (!originalContent) return;
     
     document.getElementById('diff-modal').classList.remove('hidden');
     document.getElementById('diff-modal-title').textContent = `Comparing with ${agentName}`;
+    
+    // Create activity feed for real-time progress
+    const activityFeedId = 'compare-activity-feed';
     document.getElementById('diff-container').innerHTML = `
-        <div style="text-align: center; padding: 3rem;">
+        <div style="text-align: center; padding: 2rem 2rem 1rem;">
             <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
-            <p class="mt-1">Running deep behavioral analysis...</p>
-            <p class="text-muted text-sm">This may take 10-20 seconds</p>
+            <p class="mt-1" id="compare-phase-text">Starting comparison...</p>
         </div>
+        <div id="${activityFeedId}" class="activity-feed"></div>
     `;
     
+    const feed = new ActivityFeed(activityFeedId);
+    
     try {
-        const response = await fetch(`/api/compare/${agentId}`, {
-            method: 'POST',
-            body: formData
+        const eventSource = new EventSource('/api/stream/compare/' + agentId);
+        let finalData = null;
+        
+        eventSource.addEventListener('phase', (e) => {
+            const phase = JSON.parse(e.data);
+            document.getElementById('compare-phase-text').textContent = phase.message;
         });
         
-        if (!response.ok) {
-            const error = await response.json();
-            document.getElementById('diff-container').innerHTML = `
-                <div class="alert alert-error">Error: ${error.detail || 'Comparison failed'}</div>
-            `;
-            return;
-        }
+        eventSource.addEventListener('tool:pre', (e) => {
+            const data = JSON.parse(e.data);
+            feed._add('→', `<span class="tool-name">${data.tool_name}</span>`, 'tool');
+        });
         
-        const data = await response.json();
+        eventSource.addEventListener('tool:post', (e) => {
+            const data = JSON.parse(e.data);
+            const preview = data.output_preview || 'completed';
+            feed._add(data.success ? '←' : '✗', 
+                     `<span class="tool-name">${data.tool_name}</span> ${preview}`,
+                     data.success ? 'tool' : 'error');
+        });
+        
+        eventSource.addEventListener('content_block:end', (e) => {
+            const data = JSON.parse(e.data);
+            if (data.block_type === 'thinking' && data.content) {
+                const preview = data.content.substring(0, 100);
+                feed._add('▸', `Agent reasoning: ${preview}...`, 'assistant');
+            }
+        });
+        
+        eventSource.addEventListener('result', (e) => {
+            finalData = JSON.parse(e.data);
+        });
+        
+        eventSource.addEventListener('error', (e) => {
+            const data = JSON.parse(e.data);
+            document.getElementById('diff-container').innerHTML = `
+                <div class="alert alert-error">Error: ${data.message}</div>
+            `;
+            eventSource.close();
+        });
+        
+        eventSource.onmessage = (e) => {
+            if (e.data === '[DONE]') {
+                eventSource.close();
+                
+                if (finalData) {
+                    const data = finalData;
         
         // Store the comparison result
         comparedAgents[agentId] = {
@@ -2030,33 +2065,41 @@ async function deepCompare(agentId, agentName) {
             timestamp: new Date()
         };
         lastComparedAgentId = agentId;
-        
-        // Render the diff
-        renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
-        
-        // Update the similar agent card to show it's been compared
-        const card = document.getElementById(`similar-${agentId}`);
-        if (card) {
-            card.classList.add('compared');
-            // Re-render to update buttons
-            const similar = analysisData.similar_agents.find(s => s.agent.id === agentId);
-            if (similar) {
-                card.outerHTML = renderSimilarAgent(similar);
+                    
+                    // Render the diff
+                    renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
+                    
+                    // Update the similar agent card to show it's been compared
+                    const card = document.getElementById(`similar-${agentId}`);
+                    if (card) {
+                        card.classList.add('compared');
+                        // Re-render to update buttons
+                        const similar = analysisData.similar_agents.find(s => s.agent.id === agentId);
+                        if (similar) {
+                            card.outerHTML = renderSimilarAgent(similar);
+                        }
+                    }
+                    
+                    // Show Step 3 action buttons (after first comparison)
+                    document.getElementById('compare-prompt').classList.add('hidden');
+                    document.getElementById('step-3-actions').classList.remove('hidden');
+                    
+                    // Update step state
+                    setStepState(3, 'active');
+                    setStepSummary(3, `Compared (${Math.round(highestSimilarity * 100)}% overlap)`);
+                } else {
+                    document.getElementById('diff-container').innerHTML = `
+                        <div class="alert alert-error">No comparison result received</div>
+                    `;
+                }
             }
-        }
-        
-        // Show Step 3 action buttons (after first comparison)
-        document.getElementById('compare-prompt').classList.add('hidden');
-        document.getElementById('step-3-actions').classList.remove('hidden');
-        
-        // Update step state
-        setStepState(3, 'active');
-        setStepSummary(3, `Compared (${Math.round(highestSimilarity * 100)}% overlap)`);
+        };
         
     } catch (error) {
         document.getElementById('diff-container').innerHTML = `
             <div class="alert alert-error">Error: ${error.message}</div>
         `;
+        if (eventSource) eventSource.close();
     }
 }
 
@@ -2437,32 +2480,43 @@ function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
     
     // Hide compare prompt since we're showing differentiation gate
     document.getElementById('compare-prompt').classList.add('hidden');
+    
+    // Attach event listeners AFTER showing the gate
+    const diffBtn = document.getElementById('differentiate-early-btn');
+    const continueBtn = document.getElementById('continue-quality-btn');
+    
+    // Remove any existing listeners by cloning (prevents duplicate listeners)
+    const newDiffBtn = diffBtn.cloneNode(true);
+    const newContinueBtn = continueBtn.cloneNode(true);
+    diffBtn.parentNode.replaceChild(newDiffBtn, diffBtn);
+    continueBtn.parentNode.replaceChild(newContinueBtn, continueBtn);
+    
+    // Attach fresh listeners
+    document.getElementById('differentiate-early-btn').addEventListener('click', () => {
+        // Hide the gate
+        document.getElementById('early-diff-gate').classList.add('hidden');
+        
+        // Mark Step 3 complete
+        setStepState(3, 'completed');
+        
+        // Skip Steps 4 (Quality Evaluation) - mark as skipped
+        setStepState(4, 'skipped');
+        setStepSummary(4, 'Skipped - differentiation prioritized');
+        document.getElementById('step-4-card').classList.add('completed');
+        
+        // Jump to Step 5 and show differentiation options immediately
+        enableStep5WithDifferentiation();
+    });
+    
+    document.getElementById('continue-quality-btn').addEventListener('click', () => {
+        // Hide the gate
+        document.getElementById('early-diff-gate').classList.add('hidden');
+        
+        // Proceed normally to quality evaluation
+        setStepState(3, 'completed');
+        enableStep4();
+    });
 }
-
-document.getElementById('differentiate-early-btn').addEventListener('click', () => {
-    // Hide the gate
-    document.getElementById('early-diff-gate').classList.add('hidden');
-    
-    // Mark Step 3 complete
-    setStepState(3, 'completed');
-    
-    // Skip Steps 4 (Quality Evaluation) - mark as skipped
-    setStepState(4, 'skipped');
-    setStepSummary(4, 'Skipped - differentiation prioritized');
-    document.getElementById('step-4-card').classList.add('completed');
-    
-    // Jump to Step 5 and show differentiation options immediately
-    enableStep5WithDifferentiation();
-});
-
-document.getElementById('continue-quality-btn').addEventListener('click', () => {
-    // Hide the gate
-    document.getElementById('early-diff-gate').classList.add('hidden');
-    
-    // Proceed normally to quality evaluation
-    setStepState(3, 'completed');
-    enableStep4();
-});
 
 function enableStep5WithDifferentiation() {
     // Go directly to Step 5 with differentiation options visible
