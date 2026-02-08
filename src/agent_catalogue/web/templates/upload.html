@@ -1100,14 +1100,14 @@
                             <h5>Pattern 1: Quick Refinement</h5>
                             <p>AI removes overlapping capabilities and sharpens unique value</p>
                             <p class="pattern-duration">~15-20 seconds</p>
-                            <button class="btn btn-primary" id="pattern1-btn">Use Pattern 1</button>
+                            <button class="btn btn-primary" id="pattern1-btn">Quick Refinement →</button>
                         </div>
                         
                         <div class="pattern-card">
                             <h5>Pattern 2: Strategic Analysis</h5>
                             <p>Recipe-based: analyzes overlap, proposes multiple differentiation strategies for your review</p>
                             <p class="pattern-duration">~30-60 seconds (includes approval step)</p>
-                            <button class="btn btn-accent" id="pattern2-btn">Use Pattern 2</button>
+                            <button class="btn btn-accent" id="pattern2-btn">Strategic Analysis →</button>
                         </div>
                     </div>
                     
@@ -1393,6 +1393,14 @@ fileWrapper.addEventListener('drop', (e) => {
 // Analyze button
 analyzeBtn.addEventListener('click', async function() {
     if (!uploadedFile) return;
+    
+    // CRITICAL: Read file content first and store for later use
+    try {
+        originalContent = await uploadedFile.text();
+    } catch (error) {
+        alert('Failed to read file content: ' + error.message);
+        return;
+    }
     
     const formData = new FormData();
     formData.append('file', uploadedFile);
