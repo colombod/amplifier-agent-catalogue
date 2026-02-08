@@ -413,9 +413,7 @@ class RecipeStatusResponse(BaseModel):
     """Response from recipe status endpoint."""
 
     session_id: str
-    status: str = Field(
-        ..., description="running | paused_for_approval | completed | failed"
-    )
+    status: str = Field(..., description="running | paused_for_approval | completed | failed")
     recipe_name: str | None = None
     current_stage: str | None = None
     outputs: dict[str, Any] = Field(default_factory=dict)
@@ -926,6 +924,12 @@ async def analyze_agent(
     else:
         similarity_threshold = 0.6
 
+    logger.info(
+        "POST /api/analyze: similarity detection - content_length=%d, threshold=%.2f",
+        content_length,
+        similarity_threshold,
+    )
+
     embedding = embedder.embed(content_str)
     similar_with_metadata = db_repo.find_similar_with_metadata(
         embedding, threshold=similarity_threshold, limit=5
@@ -937,8 +941,24 @@ async def analyze_agent(
         similar_agents=similar_with_metadata,
     )
 
+    # Calculate highest similarity score for early differentiation gate decision
+    highest_similarity = max((s.similarity_score for s in similar_agents), default=0.0)
     has_significant_overlap = any(s.comparison.has_significant_overlap for s in similar_agents)
+
     logger.info("POST /api/analyze: found %d similar agents", len(similar_agents))
+    if similar_agents:
+        logger.info(
+            "POST /api/analyze: highest_similarity=%.2f (early gate triggers at >=0.70)",
+            highest_similarity,
+        )
+        for i, agent in enumerate(similar_agents[:3], 1):
+            logger.info(
+                "  %d. %s (%.1f%% similar, %d shared capabilities)",
+                i,
+                agent.agent.name,
+                agent.similarity_score * 100,
+                len(agent.comparison.capabilities.shared),
+            )
 
     return AnalyzeResponse(
         metadata=metadata,
@@ -962,7 +982,11 @@ async def evaluate_agent_quality(
 
     content = await file.read()
     content_str = content.decode("utf-8")
-    logger.info("POST /api/evaluate: content_length=%d", len(content_str))
+    logger.info("=" * 80)
+    logger.info("POST /api/evaluate: QUALITY ANALYSIS STARTING")
+    logger.info("  Content length: %d chars", len(content_str))
+    logger.info("  This could be Path A (after differentiation) or Path B (original content)")
+    logger.info("=" * 80)
 
     # LLM: evaluate quality via Amplifier
     eval_response = await session_mgr.run_one_shot(
@@ -997,6 +1021,12 @@ async def evaluate_agent_quality(
     grade = evaluation.grade
     score = evaluation.overall_score
     issues = raw.get("issues", [])
+
+    logger.info("POST /api/evaluate: Quality evaluation complete")
+    logger.info("  Overall score: %.1f/10", score)
+    logger.info("  Grade: %s", grade)
+    logger.info("  Issues found: %d", len(issues))
+    logger.info("=" * 80)
     can_improve = len(issues) > 0
 
     estimated_score = None
@@ -1261,13 +1291,18 @@ async def refine_agent_content(
     # Use differentiator agent (has strategic frameworks), not improver
     try:
         logger.info("=" * 80)
-        logger.info("CALLING DIFFERENTIATOR AGENT")
+        logger.info(
+            "POST /api/refine: EARLY DIFFERENTIATION PATH - User clicked 'Differentiate Now'"
+        )
+        logger.info("  Calling differentiator agent")
         logger.info("  Prompt length: %d chars", len(refine_prompt))
-        logger.info("  Overlapping agents: %d", len(full_agents))
+        logger.info("  Overlapping agents being analyzed: %d", len(full_agents))
+        for i, agent in enumerate(full_agents, 1):
+            logger.info("    %d. %s", i, agent["name"])
 
         refined_raw = await session_mgr.run_one_shot("differentiator", refine_prompt)
 
-        logger.info("DIFFERENTIATOR RESPONSE:")
+        logger.info("POST /api/refine: Differentiator response received")
         logger.info("  Length: %d chars", len(refined_raw) if refined_raw else 0)
         logger.info("  First 500 chars: %r", refined_raw[:500] if refined_raw else "EMPTY")
         logger.info(
@@ -1435,7 +1470,7 @@ async def stream_compare_with_agent(
     agent_id: UUID,
 ) -> StreamingResponse:
     """SSE streaming version of compare - shows real-time agent reasoning.
-    
+
     Two phases:
     1. Comparator agent analyzing behavioral differences (LLM)
     2. Narrator agent generating human-readable explanation (LLM)
@@ -1444,14 +1479,14 @@ async def stream_compare_with_agent(
     new_content = body.get("content", "")
     if not new_content:
         raise HTTPException(status_code=400, detail="content is required")
-    
+
     db_repo = request.app.state.db_repo
     session_mgr = request.app.state.session_mgr
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-    
+
     async def _emit(event: str, data: dict[str, Any]) -> None:
         await queue.put({"event": event, "data": data})
-    
+
     async def run() -> None:
         try:
             # Get existing agent
@@ -1459,19 +1494,19 @@ async def stream_compare_with_agent(
             if not existing_agent:
                 await _emit("error", {"message": "Agent not found"})
                 return
-            
+
             if not existing_agent.current_version_id:
                 await _emit("error", {"message": "Agent has no versions"})
                 return
-            
+
             existing_version = db_repo.get_version(existing_agent.current_version_id)
             if not existing_version:
                 await _emit("error", {"message": "Agent version not found"})
                 return
-            
+
             new_document = _parser.parse(new_content)
             new_name = new_document.title or "Uploaded Agent"
-            
+
             # Phase 1: Deep comparison
             await _emit(
                 "phase",
@@ -1481,7 +1516,7 @@ async def stream_compare_with_agent(
                     "agent_name": "comparator",
                 },
             )
-            
+
             compare_prompt = (
                 f"Compare these two AGENTS.md files and produce a behavioral diff.\n\n"
                 f'<agent_a name="{new_name}">\n{new_content}\n</agent_a>\n\n'
@@ -1496,15 +1531,15 @@ async def stream_compare_with_agent(
                 f'"reasoning": "..."}}\n\n'
                 f"Output ONLY valid JSON."
             )
-            
+
             compare_response = await session_mgr.run_one_shot_streaming(
                 "comparator",
                 compare_prompt,
                 queue,
             )
-            
+
             comparison = _extract_json(compare_response) or {}
-            
+
             # Phase 2: Generate narrative
             await _emit(
                 "phase",
@@ -1514,7 +1549,7 @@ async def stream_compare_with_agent(
                     "agent_name": "narrator",
                 },
             )
-            
+
             narrate_prompt = (
                 f"Generate a clear narrative explaining this agent comparison.\n\n"
                 f'Agent names: "{new_name}" vs "{existing_agent.name}"\n\n'
@@ -1528,13 +1563,13 @@ async def stream_compare_with_agent(
                 f"5. If keeping both, how to choose between them\n\n"
                 f"Output ONLY the narrative text, no JSON, no markdown headers."
             )
-            
+
             narrative = await session_mgr.run_one_shot_streaming(
                 "narrator",
                 narrate_prompt,
                 queue,
             )
-            
+
             # Emit final result
             await _emit(
                 "result",
@@ -1545,15 +1580,15 @@ async def stream_compare_with_agent(
                     "existing_agent": existing_agent.name,
                 },
             )
-            
+
         except Exception as e:
             logger.exception("SSE compare failed")
             await _emit("error", {"message": str(e)})
         finally:
             await queue.put(None)
-    
+
     asyncio.create_task(run())
-    
+
     async def event_generator():
         while True:
             item = await queue.get()
@@ -1563,7 +1598,7 @@ async def stream_compare_with_agent(
             event_type = item.get("event", "message")
             payload = json.dumps(item.get("data", {}))
             yield f"event: {event_type}\ndata: {payload}\n\n"
-    
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
