@@ -128,13 +128,17 @@ class SessionManager:
         return self._prepared_bundles["recipes"]
 
     def _create_override_bundle(self) -> Bundle:
-        """Create override bundle with custom providers ONLY.
+        """Create override bundle with custom providers and default_provider.
 
-        Only includes app-specific configuration:
+        Follows thin bundle pattern - only declares what's unique to this app:
         - Custom providers (Azure, Anthropic) from settings.yaml
+        - default_provider selection (REQUIRED to activate providers)
+
+        Foundation provides (inherited via compose):
+        - orchestrator config (loop-streaming)
+        - context config (context-simple)
 
         Does NOT include:
-        - Session config (use recipes/foundation defaults)
         - tool-recipes (comes from @recipes)
         - Foundation tools (come via @recipes -> foundation)
         """
@@ -159,10 +163,19 @@ class SessionManager:
 
             providers.append(provider_config)
 
+        # Find active provider (priority=1) - REQUIRED to activate providers
+        active_provider = next(
+            (p.module for p in self._config.providers if p.is_active),
+            self._config.providers[0].module if self._config.providers else None,
+        )
+
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
+            session={
+                "default_provider": active_provider,
+            },
         )
 
     # -- Session Creation -----------------------------------------------
