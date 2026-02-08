@@ -344,9 +344,15 @@ function renderCapabilities(items, type) {
     if (!items || items.length === 0) {
         return '<div class="diff-empty">None</div>';
     }
-    return items.map(item => `
-        <div class="diff-item diff-item-${type}">${item}</div>
-    `).join('');
+    return items.map(item => {
+        // Handle both string items and object items
+        let displayText = item;
+        if (typeof item === 'object' && item !== null) {
+            // If it's an object, try to extract meaningful text
+            displayText = item.name || item.capability || item.description || JSON.stringify(item);
+        }
+        return `<div class="diff-item diff-item-${type}">${escapeHtml(displayText)}</div>`;
+    }).join('');
 }
 
 function renderBehavioralDifferences(behDiff, newName, existingName) {
@@ -356,13 +362,19 @@ function renderBehavioralDifferences(behDiff, newName, existingName) {
     
     const items = Object.entries(behDiff).map(([key, value]) => {
         if (typeof value === 'object' && value !== null) {
-            const agentA = value.agent_a || value[newName] || '';
-            const agentB = value.agent_b || value[existingName] || '';
+            // Try multiple field names that LLM might use
+            const agentA = value.agent_a || value.new_agent || value[newName] || value.a || '';
+            const agentB = value.agent_b || value.existing_agent || value[existingName] || value.b || '';
+            
+            // Convert to string if still an object
+            const textA = typeof agentA === 'object' ? JSON.stringify(agentA) : agentA;
+            const textB = typeof agentB === 'object' ? JSON.stringify(agentB) : agentB;
+            
             return `
                 <div class="diff-behavioral-item">
                     <div class="diff-behavioral-label">${formatLabel(key)}</div>
-                    <div class="diff-behavioral-value agent-a">+ ${agentA}</div>
-                    <div class="diff-behavioral-value agent-b">− ${agentB}</div>
+                    <div class="diff-behavioral-value agent-a">+ ${newName}: ${escapeHtml(textA)}</div>
+                    <div class="diff-behavioral-value agent-b">− ${existingName}: ${escapeHtml(textB)}</div>
                 </div>
             `;
         }
@@ -393,5 +405,12 @@ function getRecIcon(action) {
         'replace': '↻'
     };
     return icons[action] || '•';
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
 }
 </script>

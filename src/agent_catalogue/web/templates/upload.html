@@ -1983,7 +1983,7 @@ function renderSimilarAgent(similar) {
                             👁️ View Result
                         </button>
                     ` : ''}
-                    <a href="/agent/${similar.agent.slug}" class="btn btn-sm">View Agent</a>
+                    <a href="/agent/${similar.agent.slug}" target="_blank" class="btn btn-sm">View Agent ↗</a>
                 </div>
             </div>
         </div>
@@ -2611,7 +2611,7 @@ async function storeAgent(btn) {
                 <div class="decision-title">Agent stored successfully</div>
                 <div><strong>${result.agent.name}</strong> is now in the catalogue.</div>
                 <div class="action-buttons" style="margin-top: 0.75rem;">
-                    <a href="/agent/${result.agent.slug}" class="btn btn-primary">View Agent</a>
+                    <a href="/agent/${result.agent.slug}" target="_blank" class="btn btn-primary">View Agent ↗</a>
                     <a href="/upload" class="btn">Upload Another</a>
                 </div>
             </div>
