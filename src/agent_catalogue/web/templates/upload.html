@@ -1402,19 +1402,37 @@ analyzeBtn.addEventListener('click', async function() {
         return;
     }
     
-    const formData = new FormData();
-    formData.append('file', uploadedFile);
-    
     const prevErr = document.getElementById('analyze-error');
     if (prevErr) prevErr.remove();
 
+    // Disable button during analysis
+    this.innerHTML = '<span class="loading-spinner"></span>Analyzing...';
+    this.disabled = true;
+
+    // Show activity feed for real-time progress
+    const activityFeedId = 'analyze-activity-feed';
+    document.getElementById('step-1-body').insertAdjacentHTML('beforeend', `
+        <div id="analyze-progress" style="margin-top: 1rem;">
+            <p id="analyze-phase-text" style="text-align: center; color: var(--text-muted); margin-bottom: 0.5rem;">
+                Starting analysis...
+            </p>
+            <div id="${activityFeedId}" class="activity-feed"></div>
+        </div>
+    `);
+    
+    const feed = new ActivityFeed(activityFeedId);
+
     try {
-        this.innerHTML = '<span class="loading-spinner"></span>Analyzing...';
-        this.disabled = true;
+        // Use streaming endpoint for real-time visibility
+        const eventSource = new EventSource('/api/stream/analyze');
+        let finalData = null;
         
-        const response = await fetch('/api/analyze', {
+        // Send content via POST body (EventSource doesn't support POST, so we'll use a workaround)
+        // Actually, we need to POST first to initiate the stream
+        const response = await fetch('/api/stream/analyze', {
             method: 'POST',
-            body: formData
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: originalContent })
         });
         
         if (!response.ok) {
@@ -1424,11 +1442,85 @@ analyzeBtn.addEventListener('click', async function() {
                     <div class="decision-title">Analysis failed</div>
                     <div>${error.detail || 'Check that the file is a valid AGENTS.md and try again.'}</div>
                 </div>`);
+            document.getElementById('analyze-progress')?.remove();
             return;
         }
-        
-        analysisData = await response.json();
-        displayAnalysis(analysisData);
+
+        // Process SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (!line.trim() || line.startsWith(':')) continue;
+                
+                if (line.startsWith('event: ')) {
+                    const eventType = line.substring(7).trim();
+                    continue;
+                }
+                
+                if (line.startsWith('data: ')) {
+                    const data = line.substring(6);
+                    if (data === '[DONE]') {
+                        if (finalData) {
+                            analysisData = finalData;
+                            displayAnalysis(analysisData);
+                            document.getElementById('analyze-progress')?.remove();
+                        }
+                        break;
+                    }
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        
+                        // Handle different event types based on structure
+                        if (parsed.phase) {
+                            // Phase update
+                            document.getElementById('analyze-phase-text').textContent = parsed.message;
+                            feed._add('⚡', parsed.message, 'phase');
+                        } else if (parsed.tool_name) {
+                            // Tool event
+                            if (parsed.success !== undefined) {
+                                // tool:post
+                                const preview = parsed.output_preview || 'completed';
+                                feed._add(parsed.success ? '←' : '✗',
+                                         `<span class="tool-name">${parsed.tool_name}</span> ${preview}`,
+                                         parsed.success ? 'tool' : 'error');
+                            } else {
+                                // tool:pre
+                                feed._add('→', `<span class="tool-name">${parsed.tool_name}</span>`, 'tool');
+                            }
+                        } else if (parsed.block_type === 'thinking' && parsed.content) {
+                            // Thinking block
+                            const preview = parsed.content.substring(0, 100);
+                            feed._add('▸', `Agent reasoning: ${preview}...`, 'assistant');
+                        } else if (parsed.metadata) {
+                            // Final result
+                            finalData = parsed;
+                        } else if (parsed.message) {
+                            // Error
+                            document.getElementById('step-1-body').insertAdjacentHTML('beforeend',
+                                `<div class="decision-box danger" id="analyze-error">
+                                    <div class="decision-title">Analysis failed</div>
+                                    <div>${parsed.message}</div>
+                                </div>`);
+                            document.getElementById('analyze-progress')?.remove();
+                            break;
+                        }
+                    } catch (e) {
+                        // Ignore parse errors
+                    }
+                }
+            }
+        }
         
     } catch (error) {
         document.getElementById('step-1-body').insertAdjacentHTML('beforeend',
@@ -1436,6 +1528,7 @@ analyzeBtn.addEventListener('click', async function() {
                 <div class="decision-title">Analysis failed</div>
                 <div>${error.message}</div>
             </div>`);
+        document.getElementById('analyze-progress')?.remove();
     } finally {
         this.innerHTML = 'Analyze File →';
         this.disabled = false;

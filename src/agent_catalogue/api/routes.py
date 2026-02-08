@@ -969,6 +969,227 @@ async def analyze_agent(
     )
 
 
+@router.post("/api/stream/analyze")
+async def stream_analyze_agent(
+    request: Request,
+) -> StreamingResponse:
+    """SSE streaming version of analyze - shows real-time agent reasoning.
+
+    Three phases:
+    1. Parse and check for duplicates (fast, no LLM)
+    2. Extractor agent extracting metadata (LLM)
+    3. Classifier agent classifying domains/tags (LLM)
+    4. Find similar agents and build comparisons (fast)
+    """
+    body = await request.json()
+    content_str = body.get("content", "")
+    if not content_str:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    db_repo = request.app.state.db_repo
+    embedder = request.app.state.embedder
+    session_mgr = request.app.state.session_mgr
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _emit(event: str, data: dict[str, Any]) -> None:
+        await queue.put({"event": event, "data": data})
+
+    async def run() -> None:
+        try:
+            # Phase 1: Parse and check duplicates
+            await _emit(
+                "phase",
+                {
+                    "phase": "parsing",
+                    "message": "Parsing document and checking for duplicates...",
+                },
+            )
+
+            document = _parser.parse(content_str)
+            existing = db_repo.find_by_content_hash(document.content_hash)
+            
+            if existing:
+                agent = db_repo.get_agent(existing.agent_id)
+                await _emit(
+                    "result",
+                    {
+                        "metadata": {
+                            "name": agent.name if agent else "Unknown",
+                            "slug": agent.slug if agent else "unknown",
+                            "description": agent.description if agent else "",
+                            "purpose": "",
+                        },
+                        "similar_agents": [],
+                        "content_hash": document.content_hash,
+                        "is_duplicate": True,
+                        "has_significant_overlap": False,
+                    },
+                )
+                return
+
+            # Phase 2: Extract metadata
+            await _emit(
+                "phase",
+                {
+                    "phase": "extracting",
+                    "message": "Extractor agent analyzing structure and capabilities...",
+                    "agent_name": "extractor",
+                },
+            )
+
+            extraction_response = await session_mgr.run_one_shot_streaming(
+                "extractor",
+                f"Extract structured metadata from this AGENTS.md content. "
+                f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
+                queue,
+            )
+            metadata = _build_metadata(_extract_json(extraction_response) or {}, document)
+            logger.info(
+                "Stream analyze: extraction complete, found %d capabilities",
+                len(metadata.capabilities),
+            )
+
+            # Phase 3: Classify agent
+            await _emit(
+                "phase",
+                {
+                    "phase": "classifying",
+                    "message": "Classifier agent determining domains and tags...",
+                    "agent_name": "classifier",
+                },
+            )
+
+            classification_response = await session_mgr.run_one_shot_streaming(
+                "classifier",
+                f"Classify this agent. Return JSON with: primary_domain, "
+                f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}",
+                queue,
+            )
+            classification = _extract_json(classification_response)
+            
+            if classification:
+                # Merge classification into metadata
+                if "tags" in classification:
+                    metadata.keywords = list(set(metadata.keywords + classification.get("tags", [])))
+                if "primary_domain" in classification:
+                    pd = classification["primary_domain"]
+                    if pd and pd not in metadata.domains:
+                        metadata.domains = [pd, *metadata.domains]
+                if "complexity" in classification and classification["complexity"] in {
+                    "simple",
+                    "moderate",
+                    "complex",
+                }:
+                    metadata.complexity = classification["complexity"]
+
+            # Phase 4: Find similar agents
+            await _emit(
+                "phase",
+                {
+                    "phase": "finding_similar",
+                    "message": "Searching for similar agents in catalogue...",
+                },
+            )
+
+            content_length = len(content_str.strip())
+            if content_length < 200:
+                similarity_threshold = 0.85
+            elif content_length < 500:
+                similarity_threshold = 0.75
+            else:
+                similarity_threshold = 0.6
+
+            embedding = embedder.embed(content_str)
+            similar_with_metadata = db_repo.find_similar_with_metadata(
+                embedding, threshold=similarity_threshold, limit=5
+            )
+
+            # Phase 5: Build comparisons
+            await _emit(
+                "phase",
+                {
+                    "phase": "building_comparisons",
+                    "message": "Analyzing overlaps and differences...",
+                },
+            )
+
+            similar_agents = _comparator.build_comparison_results(
+                new_metadata=metadata,
+                similar_agents=similar_with_metadata,
+            )
+
+            highest_similarity = max((s.similarity_score for s in similar_agents), default=0.0)
+            has_significant_overlap = any(s.comparison.has_significant_overlap for s in similar_agents)
+
+            logger.info("Stream analyze: found %d similar agents", len(similar_agents))
+            if similar_agents:
+                logger.info(
+                    "Stream analyze: highest_similarity=%.2f",
+                    highest_similarity,
+                )
+
+            # Emit final result
+            await _emit(
+                "result",
+                {
+                    "metadata": {
+                        "name": metadata.name,
+                        "slug": metadata.slug,
+                        "description": metadata.description,
+                        "purpose": metadata.purpose,
+                        "capabilities": metadata.capabilities,
+                        "domains": metadata.domains,
+                        "keywords": metadata.keywords,
+                        "complexity": metadata.complexity,
+                    },
+                    "similar_agents": [
+                        {
+                            "agent": {
+                                "id": str(s.agent.id),
+                                "name": s.agent.name,
+                                "description": s.agent.description,
+                                "capabilities": s.agent.capabilities,
+                                "domains": s.agent.domains,
+                            },
+                            "similarity_score": s.similarity_score,
+                            "comparison": {
+                                "has_significant_overlap": s.comparison.has_significant_overlap,
+                                "capabilities": {
+                                    "shared": s.comparison.capabilities.shared,
+                                    "unique_to_new": s.comparison.capabilities.unique_to_new,
+                                    "unique_to_existing": s.comparison.capabilities.unique_to_existing,
+                                },
+                            },
+                        }
+                        for s in similar_agents
+                    ],
+                    "content_hash": document.content_hash,
+                    "is_duplicate": False,
+                    "has_significant_overlap": has_significant_overlap,
+                },
+            )
+
+        except Exception as e:
+            logger.exception("SSE analyze failed")
+            await _emit("error", {"message": str(e)})
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(run())
+
+    async def event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            event_type = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}))
+            yield f"event: {event_type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.post("/api/evaluate")
 async def evaluate_agent_quality(
     request: Request,
