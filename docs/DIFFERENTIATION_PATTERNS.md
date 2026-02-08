@@ -51,7 +51,7 @@ Returns RefineResponse (~15 seconds)
 
 ## Pattern 2: Recipe-Based Strategic Differentiation
 
-**Status**: 🚧 **Recipe valid, endpoints not yet implemented**
+**Status**: ✅ **FULLY IMPLEMENTED** (backend + frontend complete as of Feb 2026)
 
 **Recipe**: `recipes/differentiate-agent.yaml`
 
@@ -65,7 +65,7 @@ Returns RefineResponse (~15 seconds)
 ```
 User clicks "Strategic Differentiation"
   ↓
-POST /api/recipe/execute
+POST /api/recipe/start
   {
     recipe_path: "recipes/differentiate-agent.yaml",
     context: {content: "...", overlapping_agent_ids: [...]  }
@@ -124,11 +124,26 @@ For multi-choice UX (let user pick strategy 1, 2, or 3), use Pattern 1 with enha
 - **Resumable**: Yes (recipe checkpoints after each step)
 - **Event streaming**: Yes (can stream events.jsonl)
 
-**Implementation needed**:
-- [ ] `POST /api/recipe/execute` - Start recipe
-- [ ] `GET /api/recipe/status/{id}` - Poll for status + outputs
-- [ ] `POST /api/recipe/approve/{id}/{stage}` - User approval
-- [ ] `GET /api/recipe/events/{id}` - SSE event stream (optional)
+**Implementation**:
+- ✅ `POST /api/recipe/start` - Start recipe execution
+- ✅ `GET /api/recipe/status/{session_id}` - Poll for status + outputs
+- ✅ `POST /api/recipe/approve` - User approval/denial
+- ✅ `GET /api/recipe/sessions` - List all recipe sessions
+- ✅ `GET /api/recipe/approvals` - List pending approvals
+- ✅ `POST /api/recipe/cancel/{session_id}` - Cancel execution
+- ⏸️ `GET /api/recipe/events/{id}` - SSE event stream (Issue #1, optional enhancement)
+
+**Frontend**:
+- ✅ Strategic Differentiation button (shows when duplication >80%)
+- ✅ Approval modal with strategy review
+- ✅ Polling mechanism for recipe status
+- ✅ Approve/deny/close handlers
+- ✅ Content update after completion
+
+**Code locations**:
+- Backend: `src/agent_catalogue/api/recipes_routes.py` (all endpoints)
+- Frontend: `src/agent_catalogue/web/templates/upload.html:1017-2403` (UI integration)
+- Tests: `tests/test_recipe_endpoints_quick.py` (verified)
 
 ---
 
@@ -347,8 +362,9 @@ def test_recipe_flow():
 | Differentiator agent | ✅ Working | Applies strategic frameworks |
 | /api/refine endpoint | ✅ Working | Test passed, 15s latency |
 | differentiate-agent.yaml | ✅ Valid | Staged recipe with approval |
-| Recipe endpoints | ⏸️  Not implemented | Pattern documented |
-| Recipe tests | ⏸️  Not implemented | Structure outlined |
-| Event streaming | ⏸️  Not implemented | SSE pattern documented |
+| Recipe endpoints (6 total) | ✅ Implemented | All endpoints tested Feb 2026 |
+| Recipe frontend integration | ✅ Implemented | Button, modal, polling (commit c8bb6d1) |
+| Recipe backend tests | ✅ Passing | test_recipe_endpoints_quick.py |
+| Event streaming (SSE) | ⏸️  Optional enhancement | Issue #1 (non-blocking) |
 
-**Recommendation**: Start with Pattern 1 (working), add Pattern 2 when approval workflows are needed.
+**Both patterns are production-ready as of February 2026.**

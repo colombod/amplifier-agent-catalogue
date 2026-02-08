@@ -54,19 +54,20 @@ Upload an AGENTS.md file and get:
 - Similar agents detection
 - Quality evaluation with actionable feedback
 
-### 2. Differentiation Patterns
+### 2. Differentiation Patterns ✅ Both Production-Ready
 
-**Pattern 1: Simple Refine** (One-click differentiation)
+**Pattern 1: Simple Refine** ✅ (One-click differentiation)
 - Endpoint: `POST /api/refine`
 - Flow: Upload → Detect overlap → Click "Refine" → Get differentiated version
 - Speed: ~15 seconds
 - Best for: Quick improvements
 
-**Pattern 2: Strategic Differentiation** (Multi-stage with approval gates)
+**Pattern 2: Strategic Differentiation** ✅ (Multi-stage with approval gates)
 - Endpoints: 6 recipe lifecycle endpoints
 - Flow: Start → Review strategies → Approve → Apply
 - Speed: ~30-90 seconds
 - Best for: Strategic positioning decisions
+- Status: Fully implemented (backend + frontend, Feb 2026)
 
 ### 3. Quality Improvement
 
@@ -92,16 +93,16 @@ AI-powered quality improvement:
 | `/api/refine` | POST | Differentiation (Pattern 1) |
 | `/api/search` | GET | Semantic search |
 
-### Recipe Endpoints (Pattern 2)
+### Recipe Endpoints (Pattern 2) ✅
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/recipe/start` | POST | Start recipe execution |
-| `/api/recipe/status/{session_id}` | GET | Poll recipe status |
-| `/api/recipe/sessions` | GET | List all recipe sessions |
-| `/api/recipe/approvals` | GET | List pending approvals |
-| `/api/recipe/approve` | POST | Approve/deny stage |
-| `/api/recipe/cancel/{session_id}` | POST | Cancel execution |
+| Endpoint | Method | Purpose | Status |
+|----------|--------|---------|--------|
+| `/api/recipe/start` | POST | Start recipe execution | ✅ Implemented |
+| `/api/recipe/status/{session_id}` | GET | Poll recipe status | ✅ Implemented |
+| `/api/recipe/sessions` | GET | List all recipe sessions | ✅ Implemented |
+| `/api/recipe/approvals` | GET | List pending approvals | ✅ Implemented |
+| `/api/recipe/approve` | POST | Approve/deny stage | ✅ Implemented |
+| `/api/recipe/cancel/{session_id}` | POST | Cancel execution | ✅ Implemented |
 
 ### Streaming Endpoints (SSE)
 

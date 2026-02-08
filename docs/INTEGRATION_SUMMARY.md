@@ -4,10 +4,10 @@ Complete reference for the differentiation system and recipe integration pattern
 
 ## Executive Summary
 
-The agent-catalogue has **two working differentiation patterns**:
+The agent-catalogue has **two production-ready differentiation patterns**:
 
 1. **Simple Refine** ✅ - Single-shot API endpoint (working, tested)
-2. **Recipe-Based** 🚧 - Multi-stage with approval gates (validated, endpoints not implemented)
+2. **Recipe-Based** ✅ - Multi-stage with approval gates (fully implemented Feb 2026)
 
 ## What Works Right Now
 
@@ -40,13 +40,13 @@ The agent-catalogue has **two working differentiation patterns**:
 # ✓ Changes: 7 diff sections
 ```
 
-## What's Validated But Not Integrated
+## Recipe-Based Strategic Differentiation (Pattern 2)
 
-### 🚧 Recipe-Based Strategic Differentiation
+### ✅ Fully Implemented (Feb 2026)
 
 **Recipe**: `recipes/differentiate-agent.yaml`  
-**Status**: Valid (passes `recipes validate`)  
-**Test**: `tests/test_recipe_differentiation.py` (structure validation only)
+**Status**: Production-ready  
+**Tests**: `tests/test_recipe_endpoints_quick.py` (all endpoints verified)
 
 **Stages**:
 1. **strategic-analysis** (2 steps + approval gate)
@@ -58,14 +58,19 @@ The agent-catalogue has **two working differentiation patterns**:
 
 **Limitation**: Approval gates support **approve/deny only**, not "select strategy 2 of 3".
 
-**Missing for full integration**:
-- [ ] Recipe execution endpoints (`/api/recipe/*`)
-- [ ] Frontend polling/SSE for recipe status
-- [ ] Approval gate UI components
-- [ ] State persistence helpers
-- [ ] Integration test with actual execution
+**Implementation complete**:
+- ✅ 6 recipe execution endpoints (`/api/recipe/*`)
+- ✅ Frontend polling for recipe status  
+- ✅ Approval modal UI component
+- ✅ State persistence helpers (filesystem-based)
+- ✅ Backend endpoint tests (all passing)
 
-**Implementation pattern documented** in:
+**Code locations**:
+- Backend: `src/agent_catalogue/api/recipes_routes.py`
+- Frontend: `src/agent_catalogue/web/templates/upload.html:1017-2403`
+- Tests: `tests/test_recipe_endpoints_quick.py`
+
+**Documentation**:
 - `docs/RECIPE_INTEGRATION.md` - Complete endpoint design
 - `docs/DIFFERENTIATION_PATTERNS.md` - Pattern comparison
 
