@@ -180,11 +180,6 @@ export class AnalysisAPI {
      * @throws {Error} If refinement fails
      */
     async refine(content, overlapAgents, activityFeedId) {
-        const payload = {
-            content: content,
-            overlapping_agents: overlapAgents
-        };
-        
         console.log('[API] refine() called (streaming)', { 
             url: '/api/stream/refine', 
             contentLength: content.length,
@@ -192,7 +187,17 @@ export class AnalysisAPI {
             activityFeedId
         });
 
-        return this._handleSSEStream('/api/stream/refine', payload, activityFeedId, 'result');
+        const feed = new ActivityFeed(activityFeedId);
+        const result = await feed.start('/api/stream/refine', {
+            content: content,
+            overlapping_agents: overlapAgents
+        });
+        
+        console.log('[API] refine() completed', {
+            hasRefinedContent: !!result?.refined_content
+        });
+        
+        return result;
     }
 
     /**
