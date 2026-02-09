@@ -24,6 +24,9 @@ export class WizardState {
      * Initializes all state properties to null/default values.
      */
     constructor() {
+        /** @type {string|null} Unique workflow ID for sticky session (generated on upload) */
+        this.workflowId = null;
+
         /** @type {Object|null} Analysis result from Step 2 */
         this.analysisData = null;
 

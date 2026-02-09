@@ -54,6 +54,8 @@ async def stream_analyze_agent(
     """
     body = await request.json()
     content_str = body.get("content", "")
+    workflow_id = body.get("workflow_id")  # Optional for sticky sessions
+
     if not content_str:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -108,12 +110,20 @@ async def stream_analyze_agent(
                 },
             )
 
-            extraction_response = await session_mgr.run_one_shot_streaming(
-                "extractor",
+            # Use sticky session if workflow_id provided (context accumulates)
+            extraction_prompt = (
                 f"Extract structured metadata from this AGENTS.md content. "
-                f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
-                queue,
+                f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}"
             )
+
+            if workflow_id:
+                extraction_response = await session_mgr.run_with_sticky_session(
+                    workflow_id, "extractor", extraction_prompt, queue
+                )
+            else:
+                extraction_response = await session_mgr.run_one_shot_streaming(
+                    "extractor", extraction_prompt, queue
+                )
             metadata = build_metadata(extract_json(extraction_response) or {}, document)
             logger.info(
                 "Stream analyze: extraction complete, found %d capabilities",
@@ -130,12 +140,19 @@ async def stream_analyze_agent(
                 },
             )
 
-            classification_response = await session_mgr.run_one_shot_streaming(
-                "classifier",
+            classification_prompt = (
                 f"Classify this agent. Return JSON with: primary_domain, "
-                f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}",
-                queue,
+                f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}"
             )
+
+            if workflow_id:
+                classification_response = await session_mgr.run_with_sticky_session(
+                    workflow_id, "classifier", classification_prompt, queue
+                )
+            else:
+                classification_response = await session_mgr.run_one_shot_streaming(
+                    "classifier", classification_prompt, queue
+                )
             classification = extract_json(classification_response)
 
             if classification:
@@ -278,6 +295,8 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
     """
     body = await request.json()
     content_str = body.get("content", "")
+    workflow_id = body.get("workflow_id")
+
     if not content_str:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -299,8 +318,7 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                 },
             )
 
-            eval_response = await session_mgr.run_one_shot_streaming(
-                "evaluator",
+            eval_prompt = (
                 f"Evaluate the quality of this AGENTS.md file.\n\n"
                 f"Score across 5 dimensions (clarity, completeness, specificity, "
                 f"consistency, differentiation). For each: score 0-10, cite evidence, "
@@ -313,9 +331,17 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                 f"describe problem, identify location, suggest fix.\n\n"
                 f"Return JSON with: dimensions (list), overall_score, grade, "
                 f"issues (list), strengths (list), summary.\n\n"
-                f"<content>\n{content_str}\n</content>",
-                queue,
+                f"<content>\n{content_str}\n</content>"
             )
+
+            if workflow_id:
+                eval_response = await session_mgr.run_with_sticky_session(
+                    workflow_id, "evaluator", eval_prompt, queue
+                )
+            else:
+                eval_response = await session_mgr.run_one_shot_streaming(
+                    "evaluator", eval_prompt, queue
+                )
 
             raw = extract_json(eval_response) or {}
 
@@ -403,6 +429,8 @@ async def stream_improve(request: Request) -> StreamingResponse:
     body = await request.json()
     content_str = body.get("content", "")
     provided_evaluation = body.get("evaluation")  # May be passed from Step 4
+    workflow_id = body.get("workflow_id")  # Optional for sticky sessions
+
     if not content_str:
         raise HTTPException(status_code=400, detail="content is required")
 
@@ -490,7 +518,7 @@ async def stream_improve(request: Request) -> StreamingResponse:
                 },
             )
 
-            improve_prompt = (
+            improve_prompt_text = (
                 f"Improve this AGENTS.md definition based on the quality evaluation below.\n\n"
                 f"<original_content>\n{content_str}\n</original_content>\n\n"
                 f"<evaluation_summary>\n"
@@ -510,9 +538,15 @@ async def stream_improve(request: Request) -> StreamingResponse:
                 f"Output ONLY the improved raw markdown. No preamble, no code fences."
             )
 
-            improved_raw = await session_mgr.run_one_shot_streaming(
-                "improver", improve_prompt, queue
-            )
+            # Use sticky session if workflow_id provided
+            if workflow_id:
+                improved_raw = await session_mgr.run_with_sticky_session(
+                    workflow_id, "improver", improve_prompt_text, queue
+                )
+            else:
+                improved_raw = await session_mgr.run_one_shot_streaming(
+                    "improver", improve_prompt_text, queue
+                )
             improved = strip_preamble(improved_raw)
 
             # Compute section-level diff
@@ -572,6 +606,7 @@ async def stream_refine(request: Request) -> StreamingResponse:
     body = await request.json()
     content_str = body.get("content", "")
     overlapping = body.get("overlapping_agents", [])
+    workflow_id = body.get("workflow_id")
 
     if not content_str:
         raise HTTPException(status_code=400, detail="content is required")
@@ -663,10 +698,15 @@ async def stream_refine(request: Request) -> StreamingResponse:
                 f"Output ONLY refined AGENTS.md markdown. No preamble, no code fences."
             )
 
-            # Run differentiator with streaming
-            refined_raw = await session_mgr.run_one_shot_streaming(
-                "differentiator", refine_prompt, queue
-            )
+            # Run differentiator with streaming (sticky if workflow_id provided)
+            if workflow_id:
+                refined_raw = await session_mgr.run_with_sticky_session(
+                    workflow_id, "differentiator", refine_prompt, queue
+                )
+            else:
+                refined_raw = await session_mgr.run_one_shot_streaming(
+                    "differentiator", refine_prompt, queue
+                )
 
             if not refined_raw or len(refined_raw.strip()) < 100:
                 raise HTTPException(
@@ -707,3 +747,18 @@ async def stream_refine(request: Request) -> StreamingResponse:
             yield f"event: {event_type}\ndata: {payload}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.delete("/api/session/{workflow_id}")
+async def cleanup_workflow_session(workflow_id: str, request: Request):
+    """Cleanup sticky workflow session.
+
+    Called when upload completes successfully or user cancels/navigates away.
+    Disposes of the Amplifier session and frees resources.
+    """
+    session_mgr = request.app.state.session_mgr
+
+    await session_mgr.cleanup_workflow(workflow_id)
+
+    logger.info("Cleaned up workflow session: %s", workflow_id)
+    return {"status": "ok", "workflow_id": workflow_id}

@@ -38,14 +38,18 @@ export class AnalysisAPI {
      * @returns {Promise<Object>} Analysis result with metadata and similar agents
      * @throws {Error} If analysis fails
      */
-    async analyze(content, activityFeedId) {
+    async analyze(content, activityFeedId, workflowId = null) {
         console.log('[API] analyze() called', {
             url: '/api/stream/analyze',
             contentLength: content.length,
-            activityFeedId
+            activityFeedId,
+            workflowId
         });
         const feed = new ActivityFeed(activityFeedId);
-        const result = await feed.start('/api/stream/analyze', { content });
+        const payload = { content };
+        if (workflowId) payload.workflow_id = workflowId;
+        
+        const result = await feed.start('/api/stream/analyze', payload);
         console.log('[API] analyze() completed', {
             hasResult: !!result,
             metadata: result?.metadata?.name,
@@ -63,7 +67,7 @@ export class AnalysisAPI {
      * @returns {Promise<Object>} Evaluation result with grade, scores, issues, strengths
      * @throws {Error} If evaluation fails
      */
-    async evaluate(content, evaluation, activityFeedId) {
+    async evaluate(content, evaluation, activityFeedId, workflowId = null) {
         const feed = new ActivityFeed(activityFeedId);
 
         // Support both string content and FormData for backwards compatibility
@@ -80,6 +84,8 @@ export class AnalysisAPI {
                 evaluation: evaluation
             };
         }
+        
+        if (workflowId) payload.workflow_id = workflowId;
 
         return await feed.start('/api/stream/evaluate', payload);
     }
@@ -94,12 +100,13 @@ export class AnalysisAPI {
      * @returns {Promise<Object>} Improvement result with refined content and changes
      * @throws {Error} If improvement fails
      */
-    async improve(content, evaluation, issues, activityFeedId) {
+    async improve(content, evaluation, issues, activityFeedId, workflowId = null) {
         console.log('[API] improve() called', {
             url: '/api/stream/improve',
             contentLength: typeof content === 'string' ? content.length : 'FormData',
             issueCount: issues?.length || 0,
-            hasEvaluation: !!evaluation
+            hasEvaluation: !!evaluation,
+            workflowId
         });
         const feed = new ActivityFeed(activityFeedId);
 
@@ -118,6 +125,8 @@ export class AnalysisAPI {
                 issues: issues
             };
         }
+        
+        if (workflowId) payload.workflow_id = workflowId;
 
         return await feed.start('/api/stream/improve', payload);
     }
@@ -179,19 +188,23 @@ export class AnalysisAPI {
      * @returns {Promise<Object>} Refinement result with refined_content
      * @throws {Error} If refinement fails
      */
-    async refine(content, overlapAgents, activityFeedId) {
+    async refine(content, overlapAgents, activityFeedId, workflowId = null) {
         console.log('[API] refine() called (streaming)', { 
             url: '/api/stream/refine', 
             contentLength: content.length,
             agentCount: overlapAgents.length,
-            activityFeedId
+            activityFeedId,
+            workflowId
         });
 
         const feed = new ActivityFeed(activityFeedId);
-        const result = await feed.start('/api/stream/refine', {
+        const payload = {
             content: content,
             overlapping_agents: overlapAgents
-        });
+        };
+        if (workflowId) payload.workflow_id = workflowId;
+        
+        const result = await feed.start('/api/stream/refine', payload);
         
         console.log('[API] refine() completed', {
             hasRefinedContent: !!result?.refined_content

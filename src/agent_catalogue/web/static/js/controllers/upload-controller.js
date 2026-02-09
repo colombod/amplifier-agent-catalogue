@@ -48,6 +48,7 @@ export class UploadController {
         this.setupEarlyDifferentiationGate();
         this.setupModals();
         this.setupStateWrapping();
+        this.setupSessionCleanup();
         
         // Check for restorable state on page load
         this.state.checkRestorable(
@@ -113,9 +114,14 @@ export class UploadController {
             // CRITICAL: Read file content first and store for later use
             try {
                 this.state.originalContent = await this.state.uploadedFile.text();
+                
+                // Generate workflow_id for sticky session (context accumulates across agents)
+                this.state.workflowId = crypto.randomUUID();
+                
                 console.log('[Analysis] File content loaded:', {
                     length: this.state.originalContent.length,
-                    lines: this.state.originalContent.split('\n').length
+                    lines: this.state.originalContent.split('\n').length,
+                    workflowId: this.state.workflowId
                 });
             } catch (error) {
                 console.error('[Analysis] Failed to read file content:', error);
@@ -140,8 +146,12 @@ export class UploadController {
 
             try {
                 console.log('[Analysis] Starting API call with content length:', this.state.originalContent.length);
-                // Use API client for streaming analysis
-                this.state.analysisData = await this.api.analyze(this.state.originalContent, activityFeedId);
+                // Use API client for streaming analysis (with workflow_id for sticky session)
+                this.state.analysisData = await this.api.analyze(
+                    this.state.originalContent, 
+                    activityFeedId,
+                    this.state.workflowId
+                );
 
                 console.log('[Analysis] Complete, received data:', {
                     metadata: this.state.analysisData?.metadata?.name,
@@ -431,7 +441,8 @@ export class UploadController {
             this.state.evaluationData = await this.api.evaluate(
                 contentToEvaluate, 
                 this.state.evaluationData,
-                'evaluate-activity-feed'
+                'evaluate-activity-feed',
+                this.state.workflowId
             );
 
             console.log('[Step4] Evaluation complete:', {
@@ -501,7 +512,13 @@ export class UploadController {
             spinnerWrap.style.display = 'none';
 
             try {
-                const data = await this.api.improve(contentStr, this.state.evaluationData, issues, 'improve-activity-feed');
+                const data = await this.api.improve(
+                    contentStr, 
+                    this.state.evaluationData, 
+                    issues, 
+                    'improve-activity-feed',
+                    this.state.workflowId
+                );
                 await this.displayImproveResults(data);
                 return;
             } catch {
@@ -524,7 +541,13 @@ export class UploadController {
 
         try {
             if (improveNarrative) clearInterval(improveNarrative);
-            const data = await this.api.improve(formData, this.state.evaluationData, issues, 'improve-activity-feed');
+            const data = await this.api.improve(
+                formData, 
+                this.state.evaluationData, 
+                issues, 
+                'improve-activity-feed',
+                this.state.workflowId
+            );
             await this.displayImproveResults(data);
         } catch (error) {
             if (improveNarrative) clearInterval(improveNarrative);
@@ -675,12 +698,41 @@ export class UploadController {
             }
         });
 
-        document.getElementById('cancel-upload-btn')?.addEventListener('click', () => {
+        document.getElementById('cancel-upload-btn')?.addEventListener('click', async () => {
             if (confirm('Cancel this upload? All analysis and improvements will be discarded.')) {
+                await this.cleanupStickySession();
                 sessionStorage.removeItem('wizardState');
                 window.location.href = '/';
             }
         });
+    }
+
+    setupSessionCleanup() {
+        // Cleanup sticky session on page navigation/close
+        window.addEventListener('beforeunload', () => {
+            if (this.state.workflowId) {
+                // Use sendBeacon for reliable delivery during unload
+                navigator.sendBeacon(
+                    `/api/session/${this.state.workflowId}`,
+                    new Blob([JSON.stringify({})], {type: 'application/json'})
+                );
+            }
+        });
+    }
+
+    async cleanupStickySession() {
+        if (!this.state.workflowId) return;
+        
+        try {
+            await fetch(`/api/session/${this.state.workflowId}`, {
+                method: 'DELETE'
+            });
+            console.log('[Session] Cleaned up sticky session:', this.state.workflowId);
+        } catch (error) {
+            console.warn('[Session] Cleanup failed (non-critical):', error);
+        }
+        
+        this.state.workflowId = null;
     }
 
     async storeAgent(btn) {
@@ -705,6 +757,9 @@ export class UploadController {
             this.steps.setStepState(5, 'completed');
             this.steps.setStepSummary(5, 'Stored');
             sessionStorage.removeItem('wizardState');
+            
+            // Cleanup sticky session on success
+            await this.cleanupStickySession();
 
             document.getElementById('decision-display').innerHTML = `
                 <div class="decision-box success">
@@ -786,7 +841,8 @@ export class UploadController {
             const data = await this.api.refine(
                 this.state.improvedContent || this.state.originalContent,
                 [window._lastOverlapAgents[0]],
-                'refine-activity-feed'  // SSE events go here
+                'refine-activity-feed',  // SSE events go here
+                this.state.workflowId
             );
             
             document.getElementById('step-3-loading')?.classList.add('hidden');

@@ -95,6 +95,10 @@ class SessionManager:
         # Cached prepared bundles (expensive to prepare)
         self._prepared_bundles: dict[str, Any] = {}
 
+        # Sticky workflow sessions (context accumulates across agents)
+        self._sticky_sessions: dict[str, AmplifierSession] = {}
+        self._last_activity: dict[str, datetime] = {}
+
     async def startup(self, db_repo: Any, embedder: Any) -> None:
         """Initialize the session manager. Called during FastAPI lifespan startup.
 
@@ -120,6 +124,8 @@ class SessionManager:
         """Clean up all active sessions. Called during FastAPI lifespan shutdown."""
         for workflow_id in list(self._active_sessions.keys()):
             await self.close_workflow(workflow_id)
+        for workflow_id in list(self._sticky_sessions.keys()):
+            await self.cleanup_workflow(workflow_id)
         logger.info("SessionManager shut down, all sessions cleaned up")
 
     # -- Bundle Loading & Composition ------------------------------------
@@ -622,6 +628,109 @@ class SessionManager:
                     pass
             self.sse_bridge.remove_queue(sid)
             await session.cleanup()
+
+    # -- Sticky Workflow Sessions (Phase 1) -----------------------------
+
+    async def run_with_sticky_session(
+        self,
+        workflow_id: str,
+        agent_name: str,
+        instruction: str,
+        event_queue: asyncio.Queue | None = None,
+    ) -> str:
+        """Run agent in a sticky session that persists across the workflow.
+
+        Creates a session on first call for this workflow_id, then reuses it
+        for subsequent agents. Context accumulates across all agent executions.
+
+        Args:
+            workflow_id: Unique identifier for the upload workflow (from frontend)
+            agent_name: Name of specialist agent to run
+            instruction: Prompt for the agent
+            event_queue: Optional SSE event queue for streaming
+
+        Returns:
+            Agent response string
+
+        Lifecycle:
+            - First call: Creates session, injects agent prompt, executes
+            - Subsequent calls: Injects new agent prompt, executes (context preserved)
+            - Cleanup: Call cleanup_workflow() when workflow completes
+        """
+        logger.info(
+            "Sticky session: workflow=%s agent=%s instruction_length=%d",
+            workflow_id,
+            agent_name,
+            len(instruction),
+        )
+
+        # Create session if first time for this workflow
+        if workflow_id not in self._sticky_sessions:
+            logger.info("Creating new sticky session for workflow=%s", workflow_id)
+            session = await self._create_session_from_bundle(bundle_type="recipes")
+            await self._mount_catalogue_tools(session)
+            self._sticky_sessions[workflow_id] = session
+            logger.info("Sticky session created: session_id=%s", session.session_id)
+        else:
+            logger.info("Reusing sticky session for workflow=%s", workflow_id)
+
+        session = self._sticky_sessions[workflow_id]
+        self._last_activity[workflow_id] = datetime.now(UTC)
+
+        # Build agent-specific system prompt
+        system_prompt = self._build_agent_prompt(agent_name)
+
+        # Inject agent prompt into session context
+        context = session.coordinator.get("context")
+        await context.add_message({"role": "system", "content": system_prompt})
+
+        # Register SSE hooks if streaming
+        unregisters = []
+        if event_queue:
+            sid = session.session_id
+            logger.info("Registering SSE hooks for session %s (agent=%s)", sid, agent_name)
+            unregisters = self.sse_bridge.register_hooks(
+                session, workflow_id, agent_name=agent_name
+            )
+            self.sse_bridge._queues[workflow_id] = event_queue
+            logger.info("SSE bridge queue mapped for workflow %s", workflow_id)
+
+        try:
+            response = await session.execute(instruction)
+            logger.info("Sticky session agent %s completed", agent_name)
+            return response
+        finally:
+            # Unregister SSE hooks but keep session alive
+            for unreg in unregisters:
+                try:
+                    unreg()
+                except Exception:
+                    pass
+            if event_queue:
+                self.sse_bridge.remove_queue(workflow_id)
+
+    async def cleanup_workflow(self, workflow_id: str) -> None:
+        """Dispose of sticky session and free resources.
+
+        Call when workflow completes (success) or is cancelled.
+        """
+        if workflow_id not in self._sticky_sessions:
+            return
+
+        logger.info("Cleaning up sticky session for workflow=%s", workflow_id)
+        session = self._sticky_sessions[workflow_id]
+
+        try:
+            await session.cleanup()
+        except Exception:
+            logger.warning(
+                "Error during session cleanup for workflow=%s", workflow_id, exc_info=True
+            )
+        finally:
+            del self._sticky_sessions[workflow_id]
+            if workflow_id in self._last_activity:
+                del self._last_activity[workflow_id]
+            logger.info("Sticky session cleaned up: workflow=%s", workflow_id)
 
     # -- Session Persistence --------------------------------------------
 
