@@ -166,98 +166,141 @@ cd amplifier-agent-catalogue
 # 2. Install dependencies
 uv sync
 
-# 3. Configure environment (see Configuration below)
-cp .env.example .env
-# Edit .env with your credentials
+# 3. Configure providers and settings
+agent-catalogue init
 
-# 4. Initialize Amplifier providers (automatic on first run)
-# Providers are installed automatically when the server starts
-# No manual initialization needed!
+# 4. Start the server
+uv run agent-catalogue serve
 
-# 5. Start the server
-uv run agent-catalogue serve --host 127.0.0.1 --port 8000
-
-# 6. Open http://localhost:8000
+# 5. Open http://localhost:8000
 ```
 
-**What happens on first startup:**
-1. Application loads `.env` credentials
-2. SessionManager automatically installs Amplifier providers:
-   - `provider-anthropic` (from GitHub + SDK dependencies)
-   - `provider-openai` (available if configured)
-   - `provider-azure-openai` (available if configured)
-3. Creates DuckDB database at `data/catalogue.duckdb`
-4. Loads agent definitions from `agents/` directory
-5. Server ready at http://127.0.0.1:8000
+### Provider Configuration (`agent-catalogue init`)
 
-**Startup logs to expect:**
+The `init` command is a guided setup wizard that configures LLM providers,
+embeddings, and server settings. Run it before starting the server for the
+first time.
+
+**Interactive mode** (recommended):
+
+```bash
+agent-catalogue init
 ```
-Initializing DuckDB at data/catalogue.duckdb
-Initializing embedder (endpoint=https://..., auth=rbac)
-Installing provider-anthropic...
-✓ Installed: provider-anthropic
-Starting Amplifier SessionManager...
-Loaded @recipes bundle: recipes
-SessionManager started with providers: ['provider-anthropic']
-Agent Catalogue ready on 127.0.0.1:8000
+
+This walks you through three steps:
+
+**Step 1: Provider** - Installs available Amplifier providers from GitHub
+(`provider-anthropic`, `provider-openai`, `provider-azure-openai`) and lets you
+pick one. Each provider declares its own config fields, so the prompts adapt
+automatically:
+
+- **Anthropic**: Prompts for API key, then lists available models to choose from
+- **OpenAI**: Prompts for API key (and optional base URL), then lists models
+- **Azure OpenAI**: Prompts for endpoint, API key or RBAC auth, deployment name
+
+API keys are stored securely via the key manager (`~/.agent-catalogue/keys.yaml`)
+and referenced as `${VAR_NAME}` placeholders in settings.
+
+**Step 2: Embeddings** - Configures the Azure OpenAI embedding model used for
+vector similarity search:
+
 ```
+Azure OpenAI endpoint for embeddings: https://your-instance.cognitiveservices.azure.com/
+Embedding deployment name [text-embedding-3-large]:
+Embedding model name [text-embedding-3-large]:
+Embedding dimensions [3072]:
+Embedding auth method (rbac/api_key) [rbac]:
+```
+
+**Step 3: Server** - Sets host, port, and debug mode (defaults: `127.0.0.1:8000`).
+
+Settings are saved to `~/.agent-catalogue/settings.yaml`.
+
+**Non-interactive mode** (for CI or scripted setup):
+
+```bash
+# Set credentials in environment first
+export ANTHROPIC_API_KEY=sk-ant-...
+# Or for Azure OpenAI:
+# export AZURE_OPENAI_API_KEY=... AZURE_OPENAI_ENDPOINT=...
+
+# Run with --yes to auto-detect provider from env vars
+agent-catalogue init --yes
+```
+
+The `--yes` flag detects which provider to use based on environment variables
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `AZURE_OPENAI_API_KEY` +
+`AZURE_OPENAI_ENDPOINT`) and configures it without prompts.
+
+**Verify your configuration:**
+
+```bash
+agent-catalogue config
+```
+
+This displays all settings files, configured providers, embedding settings,
+storage path, and server configuration.
 
 ### Configuration
 
-The application requires two sets of credentials:
+All configuration is handled by `agent-catalogue init`. Settings are stored in
+a layered YAML system (higher layers override lower):
 
-#### 1. Azure OpenAI (for embeddings)
+| Scope | Path | Purpose |
+|-------|------|---------|
+| Global | `~/.agent-catalogue/settings.yaml` | User defaults |
+| Project | `.agent-catalogue/settings.yaml` | Team-shared (committed) |
+| Local | `.agent-catalogue/settings.local.yaml` | Machine-specific (gitignored) |
 
-Create `.env` file with your Azure OpenAI credentials:
+API keys are stored separately in `~/.agent-catalogue/keys.yaml` and injected
+via `${VAR_NAME}` placeholders.
+
+#### Supported Providers
+
+| Provider | Required Credentials | Env Vars |
+|----------|---------------------|----------|
+| **Anthropic** | API key | `ANTHROPIC_API_KEY` |
+| **OpenAI** | API key | `OPENAI_API_KEY` |
+| **Azure OpenAI** | Endpoint + API key or RBAC | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` |
+
+Providers are installed from GitHub automatically during `agent-catalogue init`.
+
+#### Embeddings
+
+The catalogue uses Azure OpenAI embeddings for vector similarity search.
+Configure during `init` Step 2, or set environment variables:
 
 ```bash
-# Azure OpenAI - For vector embeddings
-AS_AZURE_OPENAI_ENDPOINT=https://your-instance.cognitiveservices.azure.com/
-AS_AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
-AS_AZURE_OPENAI_EMBEDDING_MODEL=text-embedding-3-large
-AS_AZURE_OPENAI_EMBEDDING_DIMENSIONS=3072
-
-# Authentication (choose one)
-AS_AZURE_OPENAI_USE_RBAC=true              # Recommended: Uses Azure CLI credentials
-# OR
-AS_AZURE_OPENAI_API_KEY=your-api-key      # Alternative: Direct API key
+# Azure OpenAI - For vector embeddings (used by init --yes)
+AZURE_OPENAI_EMBEDDING_ENDPOINT=https://your-instance.cognitiveservices.azure.com/
+AZURE_OPENAI_EMBEDDING_API_KEY=your-api-key  # if not using RBAC
 ```
 
-#### 2. Anthropic (for AI agents)
+#### Example Settings File
 
-Add to `.env` file:
+After running `agent-catalogue init`, your `~/.agent-catalogue/settings.yaml`
+will look like:
 
-```bash
-# Anthropic - For AI agent reasoning
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-**Getting an API key:**
-1. Sign up at https://console.anthropic.com/
-2. Navigate to API Keys
-3. Create a new key
-4. Copy to `.env` file
-
-#### 3. Amplifier Provider Setup
-
-The application **automatically installs** Amplifier providers on startup:
-
-- `provider-anthropic` → Installed from GitHub (includes SDK)
-- `provider-openai` → Available if needed
-- `provider-azure-openai` → Available if needed
-
-**How it works:**
-- On startup, `SessionManager._install_providers()` runs `uv pip install git+https://github.com/...`
-- This installs both the provider module AND its SDK dependencies
-- Follows the amplifier-app-cli pattern for known provider sources
-- No manual provider installation needed!
-
-**Configuration in code** (`.amplifier/settings.yaml` auto-generated):
 ```yaml
 providers:
   - module: provider-anthropic
     config:
-      model: claude-sonnet-4-5-20250929
+      api_key: ${ANTHROPIC_API_KEY}
+      default_model: claude-sonnet-4-5-20250929
+      priority: 1
+embeddings:
+  endpoint: https://your-instance.cognitiveservices.azure.com/
+  deployment: text-embedding-3-large
+  model: text-embedding-3-large
+  dimensions: 3072
+  api_version: 2024-12-01-preview
+  auth: rbac
+storage:
+  db_path: ./data/catalogue.duckdb
+server:
+  host: 127.0.0.1
+  port: 8000
+  debug: false
 ```
 
 ---
@@ -289,11 +332,14 @@ Open http://localhost:8000
 ### CLI Commands
 
 ```bash
+# Configure providers, embeddings, and server (run once)
+agent-catalogue init [--yes]
+
 # Start web server
 agent-catalogue serve [--host HOST] [--port PORT] [--reload]
 
-# Check version
-agent-catalogue --version
+# Show current configuration
+agent-catalogue config
 ```
 
 ---
