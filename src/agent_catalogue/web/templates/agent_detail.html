@@ -6,11 +6,14 @@
 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
     <div>
         <h1>{{ agent.name }}</h1>
-        <p class="text-muted">{{ agent.slug }} · v{{ current_version.version_number if current_version else 1 }}{% if current_version and current_version.token_count %} · {{ "{:,}".format(current_version.token_count) }} tokens{% endif %}</p>
+        <p class="text-muted">{{ agent.slug }} · v{{ current_version.version_number if current_version else 1 }}{% if
+            current_version and current_version.token_count %} · {{ "{:,}".format(current_version.token_count) }}
+            tokens{% endif %}</p>
     </div>
     <div style="display: flex; gap: 0.5rem;">
         <a href="/download/{{ agent.slug }}?format=md" class="btn" title="Download AGENTS.md">Download .md</a>
-        <a href="/download/{{ agent.slug }}?format=json" class="btn btn-secondary" title="Download with metadata">Download .json</a>
+        <a href="/download/{{ agent.slug }}?format=json" class="btn btn-secondary"
+            title="Download with metadata">Download .json</a>
         <a href="/" class="btn btn-secondary">Back to List</a>
     </div>
 </div>
@@ -21,13 +24,13 @@
             <h3>Description</h3>
             <p>{{ agent.description or 'No description available.' }}</p>
         </div>
-        
+
         {% if current_version and current_version.metadata %}
         <div class="card">
             <h3>Purpose</h3>
             <p>{{ current_version.metadata.get('purpose', 'Not specified') }}</p>
         </div>
-        
+
         <div class="card">
             <h3>Capabilities</h3>
             {% if current_version.metadata.get('capabilities') %}
@@ -40,7 +43,7 @@
             <p class="text-muted">No capabilities listed.</p>
             {% endif %}
         </div>
-        
+
         <div class="card">
             <h3>Classification</h3>
             <p><strong>Complexity:</strong> {{ current_version.metadata.get('complexity', 'Unknown') }}</p>
@@ -48,7 +51,7 @@
         </div>
         {% endif %}
     </div>
-    
+
     <div>
         {% if current_version and current_version.metadata %}
         <div class="card">
@@ -59,7 +62,7 @@
             <p class="text-muted">No domains specified.</p>
             {% endfor %}
         </div>
-        
+
         <div class="card">
             <h3>Tools</h3>
             {% for tool in current_version.metadata.get('tools', []) %}
@@ -68,7 +71,7 @@
             <p class="text-muted">No tools specified.</p>
             {% endfor %}
         </div>
-        
+
         <div class="card">
             <h3>Triggers</h3>
             {% if current_version.metadata.get('triggers') %}
@@ -82,7 +85,7 @@
             {% endif %}
         </div>
         {% endif %}
-        
+
         <div class="card">
             <h3>Version History</h3>
             {% if versions %}
@@ -129,7 +132,8 @@
     <h3>Raw Content</h3>
     <details>
         <summary class="text-muted" style="cursor: pointer;">Click to expand AGENTS.md content</summary>
-        <pre style="margin-top: 1rem; max-height: 500px; overflow-y: auto;"><code>{{ current_version.raw_content }}</code></pre>
+        <pre
+            style="margin-top: 1rem; max-height: 500px; overflow-y: auto;"><code>{{ current_version.raw_content }}</code></pre>
     </details>
 </div>
 {% endif %}

@@ -19,7 +19,8 @@
             <a href="/agent/{{ agent.slug }}">{{ agent.name }}</a>
         </div>
         <div class="card-meta">
-            v{{ agent.current_version }} · {{ agent.version_count }} version{% if agent.version_count != 1 %}s{% endif %}{% if agent.token_count %} · {{ "{:,}".format(agent.token_count) }} tokens{% endif %}
+            v{{ agent.current_version }} · {{ agent.version_count }} version{% if agent.version_count != 1 %}s{% endif
+            %}{% if agent.token_count %} · {{ "{:,}".format(agent.token_count) }} tokens{% endif %}
         </div>
         <p class="text-sm mb-1">{{ agent.description[:150] }}{% if agent.description|length > 150 %}...{% endif %}</p>
         <div>
