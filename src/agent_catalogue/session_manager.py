@@ -175,6 +175,12 @@ class SessionManager:
             providers=providers,
             session={
                 "default_provider": active_provider,
+                # Explicit orchestrator source for server deployment
+                # Note: Repo is amplifier-module-loop-streaming (NOT orchestrator-loop-streaming)
+                "orchestrator": {
+                    "module": "loop-streaming",
+                    "source": "git+https://github.com/microsoft/amplifier-module-loop-streaming@main"
+                },
             },
         )
 
