@@ -205,23 +205,12 @@ class SessionManager:
         else:
             raise ValueError(f"Unknown bundle type: {bundle_type}")
 
-        # Get mount plan from prepared bundle
-        # prepare() already handled module resolution including tool-recipes
-        mount_plan = prepared_bundle.to_mount_plan()
-        logger.info(
-            "Mount plan has %d providers, %d tools",
-            len(mount_plan.get("providers", [])),
-            len(mount_plan.get("tools", [])),
-        )
-
-        # Create and initialize session with the composed mount plan
-        session = AmplifierSession(
-            config=mount_plan,
+        # Use PreparedBundle.create_session() helper - it handles resolver mounting
+        # This is the correct pattern: prepare() → create_session()
+        session = await prepared_bundle.create_session(
             session_id=session_id,
             parent_id=parent_id,
         )
-
-        await session.initialize()
 
         logger.info(
             "Created session %s from %s bundle (parent=%s)",
