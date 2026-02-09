@@ -442,6 +442,9 @@ export class UploadController {
 
             document.getElementById('step-4-loading')?.classList.add('hidden');
             this.renderer.displayQualityEvaluation(this.state.evaluationData);
+            
+            // Show quality decision choices (Store Current vs Improve, Then Store)
+            this.renderer.showQualityChoices(this.state.evaluationData);
 
         } catch (error) {
             console.error('[Step4] Evaluation failed:', error);
@@ -768,20 +771,40 @@ export class UploadController {
         if (!this.state.originalContent || !window._lastOverlapAgents) return;
 
         document.getElementById('pattern-picker')?.classList.add('hidden');
+        
+        // Show loading state with progress narrative
+        document.getElementById('step-3-loading')?.classList.remove('hidden');
         this.steps.setStepSummary(3, 'Refining to reduce overlap...');
+        
+        const narrative = this.startProgressNarrative('step-3-progress', [
+            'Analyzing overlapping capabilities...',
+            'Identifying unique differentiation angles...',
+            'Removing duplicated coverage...',
+            'Sharpening the agent niche...',
+            'Optimizing token efficiency...'
+        ], 3000);
 
         try {
             const data = await this.api.refine(
                 this.state.improvedContent || this.state.originalContent,
                 [window._lastOverlapAgents[0]]
             );
+            
+            narrative.stop();
+            document.getElementById('step-3-loading')?.classList.add('hidden');
+            
             this.state.improvedContent = data.refined_content;
+            
+            // Show the refined content
+            this.renderer.showRefinedContent(data.refined_content, data.changes);
 
             this.steps.setStepState(3, 'completed');
             this.steps.setStepSummary(3, 'Differentiated (Pattern 1)');
             this.steps.enableStep4(this.state);
 
         } catch (error) {
+            narrative.stop();
+            document.getElementById('step-3-loading')?.classList.add('hidden');
             this.steps.setStepSummary(3, 'Refinement failed');
             alert(`Pattern 1 failed: ${error.message}. Please try again or choose Pattern 2.`);
             document.getElementById('pattern-picker')?.classList.remove('hidden');

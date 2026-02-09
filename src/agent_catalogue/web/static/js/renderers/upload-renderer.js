@@ -509,6 +509,30 @@ export class UploadRenderer {
     }
 
     /**
+     * Show refined content after Pattern 1 or Pattern 2 differentiation.
+     * 
+     * @param {string} refinedContent - The differentiated AGENTS.md content
+     * @param {Array} changes - List of change objects (optional)
+     */
+    showRefinedContent(refinedContent, changes = []) {
+        const displayEl = document.getElementById('refined-content-display');
+        const previewEl = document.getElementById('refined-content-preview');
+        const changesEl = document.getElementById('refined-changes-display');
+        
+        if (!displayEl || !previewEl) return;
+        
+        // Show full refined content in preview
+        previewEl.innerHTML = `<pre style="white-space: pre-wrap; background: var(--bg-secondary); padding: 1rem; border-radius: 4px; max-height: 400px; overflow-y: auto; font-size: 0.85rem;">${this.escapeHtml(refinedContent)}</pre>`;
+        
+        // Show changes if available
+        if (changes && changes.length > 0 && changesEl) {
+            this.renderImprovementDiff(changes);
+        }
+        
+        displayEl.classList.remove('hidden');
+    }
+
+    /**
      * Display improvement results after LLM processing.
      * 
      * @param {Object} data - Improvement data from API
