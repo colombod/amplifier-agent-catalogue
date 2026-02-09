@@ -364,6 +364,12 @@ export class UploadController {
     // ==================== Step 4 Actions ====================
 
     setupStep4Actions() {
+        // Listen for auto-triggered evaluation from enableStep4()
+        window.addEventListener('startEvaluation', () => {
+            console.log('[Step4] startEvaluation event received - running quality evaluation');
+            this.runQualityEvaluation();
+        });
+
         // Quality choices are rendered with inline onclick - wire them up with delegation
         document.getElementById('quality-choices')?.addEventListener('click', (e) => {
             if (e.target.closest('#store-current-choice')) {
@@ -391,6 +397,64 @@ export class UploadController {
 
         document.getElementById('refine-overlap-btn')?.addEventListener('click', () => this.refineToReduceOverlap());
         document.getElementById('strategic-diff-btn')?.addEventListener('click', () => this.runStrategicDifferentiation());
+    }
+
+    async runQualityEvaluation() {
+        console.log('[Step4] runQualityEvaluation started');
+        
+        const contentToEvaluate = this.state.improvedContent || this.state.originalContent;
+        if (!contentToEvaluate) {
+            console.error('[Step4] No content to evaluate!');
+            return;
+        }
+
+        console.log('[Step4] Evaluating content:', { 
+            length: contentToEvaluate.length,
+            source: this.state.improvedContent ? 'improved' : 'original'
+        });
+
+        // Show activity feed, hide static spinner
+        const feedEl = document.getElementById('evaluate-activity-feed');
+        const spinnerWrap = document.getElementById('evaluate-spinner-wrap');
+        
+        if (feedEl) {
+            feedEl.style.display = 'block';
+            console.log('[Step4] Activity feed visible');
+        }
+        if (spinnerWrap) {
+            spinnerWrap.style.display = 'none';
+            console.log('[Step4] Spinner hidden');
+        }
+
+        try {
+            console.log('[Step4] Calling API evaluate with activityFeedId: evaluate-activity-feed');
+            this.state.evaluationData = await this.api.evaluate(
+                contentToEvaluate, 
+                this.state.evaluationData,
+                'evaluate-activity-feed'
+            );
+
+            console.log('[Step4] Evaluation complete:', {
+                grade: this.state.evaluationData.grade,
+                score: this.state.evaluationData.overall_score,
+                issueCount: this.state.evaluationData.issues?.length || 0
+            });
+
+            document.getElementById('step-4-loading')?.classList.add('hidden');
+            this.renderer.displayQualityEvaluation(this.state.evaluationData);
+
+        } catch (error) {
+            console.error('[Step4] Evaluation failed:', error);
+            document.getElementById('step-4-loading')?.classList.add('hidden');
+            document.getElementById('step-4-content')?.classList.remove('hidden');
+            document.getElementById('quality-header').innerHTML = `
+                <div class="decision-box warning">
+                    <div class="decision-title">Evaluation error</div>
+                    <div>${error.message}. You can still store the agent.</div>
+                </div>
+            `;
+            this.renderer.showQualityChoices(null);
+        }
     }
 
     proceedWithOriginal() {
