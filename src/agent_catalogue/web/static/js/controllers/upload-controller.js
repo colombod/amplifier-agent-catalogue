@@ -63,6 +63,11 @@ export class UploadController {
         const fileWrapper = document.getElementById('file-wrapper');
         const analyzeBtn = document.getElementById('analyze-btn');
 
+        // Click on wrapper to open file dialog
+        fileWrapper.addEventListener('click', () => {
+            fileInput.click();
+        });
+
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 this.state.uploadedFile = fileInput.files[0];
@@ -826,16 +831,5 @@ export class UploadController {
                 }
             });
         });
-
-        // Handle file wrapper click
-        const fileWrapper = document.getElementById('file-wrapper');
-        if (fileWrapper) {
-            fileWrapper.addEventListener('click', (e) => {
-                // Only trigger if clicking the wrapper itself, not the input
-                if (e.target === fileWrapper || e.target.closest('.file-input-wrapper') === fileWrapper) {
-                    document.getElementById('file')?.click();
-                }
-            });
-        }
     }
 }
