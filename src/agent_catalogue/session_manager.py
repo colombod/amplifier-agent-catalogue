@@ -101,31 +101,31 @@ class SessionManager:
     async def _get_recipes_bundle(self) -> Any:
         """Get the prepared @recipes bundle with custom providers.
 
-        Cached for performance - prepare() downloads modules, which is expensive.
+        ALWAYS loads fresh to prevent stale module cache issues after
+        amplifier-core or amplifier-foundation updates.
         """
-        if "recipes" not in self._prepared_bundles:
-            logger.info("Loading @recipes bundle...")
+        # CRITICAL: Always load fresh - don't cache prepared bundles
+        # After amplifier package updates, cached bundles reference stale modules
+        logger.info("Loading @recipes bundle (fresh load to prevent stale cache)...")
 
-            # 1. Load @recipes bundle (includes foundation + tool-recipes)
-            recipes_bundle = await load_bundle(
-                "git+https://github.com/microsoft/amplifier-bundle-recipes@main"
-            )
-            logger.info("Loaded @recipes bundle: %s", recipes_bundle.name)
+        # 1. Load @recipes bundle (includes foundation + tool-recipes)
+        recipes_bundle = await load_bundle(
+            "git+https://github.com/microsoft/amplifier-bundle-recipes@main"
+        )
+        logger.info("Loaded @recipes bundle: %s", recipes_bundle.name)
 
-            # 2. Create override bundle with custom app config
-            override = self._create_override_bundle()
+        # 2. Create override bundle with custom app config
+        override = self._create_override_bundle()
 
-            # 3. Compose recipes + override
-            composed = recipes_bundle.compose(override)
-            logger.info("Composed bundle with custom providers")
+        # 3. Compose recipes + override
+        composed = recipes_bundle.compose(override)
+        logger.info("Composed bundle with custom providers")
 
-            # 4. Prepare (download/install modules) - cache this result
-            await composed.prepare(install_deps=True)
-            logger.info("Prepared bundle (modules installed)")
+        # 4. Prepare (download/install modules) - always fresh
+        await composed.prepare(install_deps=True)
+        logger.info("Prepared bundle (modules installed)")
 
-            self._prepared_bundles["recipes"] = composed
-
-        return self._prepared_bundles["recipes"]
+        return composed
 
     def _create_override_bundle(self) -> Bundle:
         """Create override bundle with custom providers and default_provider.
