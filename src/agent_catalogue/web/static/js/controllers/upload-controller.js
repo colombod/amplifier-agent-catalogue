@@ -790,7 +790,7 @@ export class UploadController {
                 [window._lastOverlapAgents[0]]
             );
             
-            narrative.stop();
+            clearInterval(narrative);
             document.getElementById('step-3-loading')?.classList.add('hidden');
             
             this.state.improvedContent = data.refined_content;
@@ -803,7 +803,7 @@ export class UploadController {
             this.steps.enableStep4(this.state);
 
         } catch (error) {
-            narrative.stop();
+            clearInterval(narrative);
             document.getElementById('step-3-loading')?.classList.add('hidden');
             this.steps.setStepSummary(3, 'Refinement failed');
             alert(`Pattern 1 failed: ${error.message}. Please try again or choose Pattern 2.`);
