@@ -494,7 +494,36 @@ export class UploadController {
     async requestImprovement() {
         if (!this.state.uploadedFile) return;
 
+        // KEEP step-4-content visible (contains issues/evaluation)
+        // Only hide the choice buttons within it
         document.getElementById('quality-choices').classList.add('hidden');
+        
+        // Collapse issues to save vertical space but keep them visible
+        const issuesDisplay = document.getElementById('issues-display');
+        if (issuesDisplay) {
+            // Add header explaining what's happening
+            const existingHeader = issuesDisplay.querySelector('h4');
+            if (existingHeader && !existingHeader.textContent.includes('Addressing')) {
+                existingHeader.textContent = existingHeader.textContent.replace(
+                    'found',
+                    'found - addressing these issues'
+                );
+            }
+            
+            // Collapse all issues to save space during improvement
+            issuesDisplay.querySelectorAll('.issue-card').forEach(card => {
+                card.classList.remove('expanded');
+            });
+            
+            issuesDisplay.style.maxHeight = '300px';
+            issuesDisplay.style.overflowY = 'auto';
+            issuesDisplay.style.border = '1px solid var(--border)';
+            issuesDisplay.style.borderRadius = '8px';
+            issuesDisplay.style.padding = '0.75rem';
+            issuesDisplay.style.marginBottom = '1rem';
+        }
+        
+        // Show improvement section BELOW the evaluation (not instead of)
         document.getElementById('step-4-improve').classList.remove('hidden');
         document.getElementById('improve-loading').classList.remove('hidden');
         document.getElementById('improve-results').classList.add('hidden');
