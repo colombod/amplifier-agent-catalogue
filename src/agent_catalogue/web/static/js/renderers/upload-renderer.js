@@ -183,10 +183,11 @@ export class UploadRenderer {
             if (major) issueCountText.push(`${major} major`);
             if (minor) issueCountText.push(`${minor} minor`);
 
-            let issuesHtml = `<h4>${issues.length} issue${issues.length > 1 ? 's' : ''} found (${issueCountText.join(', ')})</h4>`;
+            let issuesHtml = `<h4 style="margin-bottom: 1rem;">${issues.length} issue${issues.length > 1 ? 's' : ''} found (${issueCountText.join(', ')})</h4>`;
+            issuesHtml += `<p class="text-muted text-sm" style="margin-bottom: 1rem;">Click any issue to collapse details. Issues are auto-expanded for review.</p>`;
             for (const issue of issues) {
                 issuesHtml += `
-                    <div class="issue-card ${issue.severity}" onclick="this.classList.toggle('expanded')">
+                    <div class="issue-card ${issue.severity} expanded" onclick="this.classList.toggle('expanded')">
                         <div class="issue-severity">${issue.severity}</div>
                         <div class="issue-description">${issue.description || ''}</div>
                         ${issue.suggestion ? `
