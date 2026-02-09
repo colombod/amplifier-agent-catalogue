@@ -61,3 +61,8 @@ Thumbs.db
 
 # Project specific
 *.tmpserver.pid
+.DS_Store
+*.pid
+*_log.txt
+startup_log.txt
+server.pid

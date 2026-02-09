@@ -32,50 +32,68 @@ Agent Catalogue helps you manage and discover AI agent definitions:
 ### Key Components
 
 **Amplifier Integration**:
-- SessionManager orchestrates AI agent workflows
-- 5 specialist agents (extractor, classifier, evaluator, improver, differentiator)
-- 8 custom catalogue tools (search_similar, get_agent_content, etc.)
-- Recipes bundle for multi-step workflows with approval gates
+- **SessionManager** - Orchestrates AI workflows with sticky session support
+- **5 specialist agents** - extractor, classifier, evaluator, improver, differentiator
+- **8 custom catalogue tools** - search_similar, get_agent_content, store_agent, etc.
+- **SSE Bridge** - Streams Amplifier kernel events to web UI in real-time
+- **Recipes bundle** - Multi-step workflows with approval gates
 
-**API Endpoints**:
-- REST API for CRUD operations
-- Streaming endpoints (SSE) for real-time agent execution feedback
-- Recipe endpoints for multi-stage workflows
+**Sticky Workflow Sessions** (NEW):
+- Single Amplifier session persists across all agents in upload workflow
+- Context accumulates: each agent sees prior agents' work
+- Workflow metadata preserved: similarity scores, overlap analysis
+- Automatic cleanup on success/cancel/navigation
+
+**API Architecture**:
+- **REST endpoints** - CRUD operations (list, get, search, store)
+- **Streaming endpoints (SSE)** - Real-time agent execution with event streaming
+- **Recipe endpoints** - Multi-stage workflows with approval gates
+- **Session cleanup** - DELETE /api/session/{workflow_id} for resource management
 
 ---
 
 ## Features
 
-### 1. Upload & Analysis
+### 1. Real-Time Analysis with SSE Streaming
+
+**Live feedback** during agent execution:
+- Watch AI reasoning in real-time (thinking blocks visible)
+- See tool calls as they execute (search_similar, get_agent_content)
+- Track progress through workflow phases
+- Model info displayed: `anthropic (claude-sonnet-4-5-20250929)`
+
+### 2. Sticky Workflow Sessions
+
+**Context accumulates** across all agents in a workflow:
+- Single Amplifier session persists from upload → evaluation → improvement
+- Each agent sees what prior agents said and did
+- Eliminates redundant analysis work
+- More intelligent decision-making with full history
+
+### 3. Cross-Stage Metadata Flow
+
+**Analysis results preserved** across workflow stages:
+- Similarity scores calculated once in step 2
+- Evaluator receives overlap context when scoring differentiation
+- Differentiator has access to stored similarity data
+- Improver gets pre-computed catalogue landscape (no redundant searches)
+
+### 4. Upload & Analysis
 
 Upload an AGENTS.md file and get:
 - Extracted metadata (name, capabilities, domains, tools, complexity)
 - Automatic classification
-- Similar agents detection
+- Similar agents detection (vector similarity)
 - Quality evaluation with actionable feedback
 
-### 2. Differentiation Patterns ✅ Both Production-Ready
-
-**Pattern 1: Simple Refine** ✅ (One-click differentiation)
-- Endpoint: `POST /api/refine`
-- Flow: Upload → Detect overlap → Click "Refine" → Get differentiated version
-- Speed: ~15 seconds
-- Best for: Quick improvements
-
-**Pattern 2: Strategic Differentiation** ✅ (Multi-stage with approval gates)
-- Endpoints: 6 recipe lifecycle endpoints
-- Flow: Start → Review strategies → Approve → Apply
-- Speed: ~30-90 seconds
-- Best for: Strategic positioning decisions
-- Status: Fully implemented (backend + frontend, Feb 2026)
-
-### 3. Quality Improvement
+### 5. Quality Improvement
 
 AI-powered quality improvement:
 - Identifies clarity, specificity, structure issues
-- Suggests concrete fixes
+- Suggests concrete fixes (with location and severity)
 - Preserves your agent's core purpose
-- Validates improvements automatically
+- Issues auto-expanded for review
+- Shows before/after quality grade badge
 
 ---
 
@@ -104,53 +122,116 @@ AI-powered quality improvement:
 | `/api/recipe/approve` | POST | Approve/deny stage | ✅ Implemented |
 | `/api/recipe/cancel/{session_id}` | POST | Cancel execution | ✅ Implemented |
 
-### Streaming Endpoints (SSE)
+### Streaming Endpoints (SSE) - Real-Time Agent Execution
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/api/stream/analyze/{workflow_id}` | Real-time analysis progress |
-| `/api/stream/evaluate/{workflow_id}` | Real-time evaluation progress |
-| `/api/stream/improve/{workflow_id}` | Real-time improvement progress |
+All streaming endpoints support sticky sessions via optional `workflow_id`:
+
+| Endpoint | Purpose | Supports Sticky |
+|----------|---------|-----------------|
+| `/api/stream/analyze` | Extract metadata + find similar agents | ✅ |
+| `/api/stream/evaluate` | Quality evaluation with enriched context | ✅ |
+| `/api/stream/refine` | Strategic differentiation | ✅ |
+| `/api/stream/improve` | AI-powered improvement with catalogue context | ✅ |
+
+**Sticky session benefits:**
+- Context accumulates across agents
+- Metadata preserved (similarity scores, overlap analysis)
+- No redundant catalogue searches
+- Automatic cleanup on completion
+
+### Session Management
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `DELETE /api/session/{workflow_id}` | DELETE | Cleanup sticky session |
 
 ---
 
-## Setup
+## Getting Started
 
 ### Prerequisites
 
-- Python 3.11+
-- Azure OpenAI access (for embeddings)
-- Anthropic API key (for LLM)
+- **Python 3.11+**
+- **Azure OpenAI** access (for embeddings)
+- **Anthropic API key** (for AI agents)
+- **uv** package manager ([install here](https://docs.astral.sh/uv/))
 
-### Installation
+### Quick Start
 
 ```bash
-# Clone repository
+# 1. Clone repository
 git clone https://github.com/colombod/amplifier-agent-catalogue.git
 cd amplifier-agent-catalogue
 
-# Install with uv (recommended)
+# 2. Install dependencies
 uv sync
 
-# Or with pip
-pip install -e ".[dev]"
+# 3. Configure environment (see Configuration below)
+cp .env.example .env
+# Edit .env with your credentials
+
+# 4. Start the server
+uv run agent-catalogue serve
+
+# 5. Open http://localhost:8000
 ```
 
 ### Configuration
 
-Create `.env` file (copy from `.env.example`):
+The application requires two sets of credentials:
+
+#### 1. Azure OpenAI (for embeddings)
+
+Create `.env` file with your Azure OpenAI credentials:
 
 ```bash
-# Azure OpenAI (for embeddings)
+# Azure OpenAI - For vector embeddings
 AS_AZURE_OPENAI_ENDPOINT=https://your-instance.cognitiveservices.azure.com/
-AS_AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o
 AS_AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
 AS_AZURE_OPENAI_EMBEDDING_MODEL=text-embedding-3-large
 AS_AZURE_OPENAI_EMBEDDING_DIMENSIONS=3072
-AS_AZURE_OPENAI_USE_RBAC=true  # Or set API key
 
-# Anthropic (for LLM via Amplifier)
+# Authentication (choose one)
+AS_AZURE_OPENAI_USE_RBAC=true              # Recommended: Uses Azure CLI credentials
+# OR
+AS_AZURE_OPENAI_API_KEY=your-api-key      # Alternative: Direct API key
+```
+
+#### 2. Anthropic (for AI agents)
+
+Add to `.env` file:
+
+```bash
+# Anthropic - For AI agent reasoning
 ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Getting an API key:**
+1. Sign up at https://console.anthropic.com/
+2. Navigate to API Keys
+3. Create a new key
+4. Copy to `.env` file
+
+#### 3. Amplifier Provider Setup
+
+The application **automatically installs** Amplifier providers on startup:
+
+- `provider-anthropic` → Installed from GitHub (includes SDK)
+- `provider-openai` → Available if needed
+- `provider-azure-openai` → Available if needed
+
+**How it works:**
+- On startup, `SessionManager._install_providers()` runs `uv pip install git+https://github.com/...`
+- This installs both the provider module AND its SDK dependencies
+- Follows the amplifier-app-cli pattern for known provider sources
+- No manual provider installation needed!
+
+**Configuration in code** (`.amplifier/settings.yaml` auto-generated):
+```yaml
+providers:
+  - module: provider-anthropic
+    config:
+      model: claude-sonnet-4-5-20250929
 ```
 
 ---
