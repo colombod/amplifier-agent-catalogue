@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
@@ -29,6 +28,7 @@ from agent_catalogue.api.models.api_models import (
     RefineResponse,
     UploadResponse,
 )
+from agent_catalogue.api.utils.analysis_utils import build_metadata
 from agent_catalogue.api.utils.diff_utils import compute_diff_sections
 from agent_catalogue.api.utils.json_extractor import extract_json, strip_preamble
 from agent_catalogue.api.utils.response_formatters import (
@@ -364,7 +364,7 @@ async def upload_agent(
     )
 
     # Build ExtractedMetadata from LLM response with fallbacks
-    metadata = _build_metadata(metadata_dict, document)
+    metadata = build_metadata(metadata_dict, document)
 
     # Generate embedding
     embedding = embedder.embed(content_str)
@@ -497,7 +497,7 @@ async def analyze_agent(
         f"Extract structured metadata from this AGENTS.md content. "
         f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
     )
-    metadata = _build_metadata(extract_json(extraction_response) or {}, document)
+    metadata = build_metadata(extract_json(extraction_response) or {}, document)
     logger.info(
         "POST /api/analyze: extraction complete, found %d capabilities",
         len(metadata.capabilities),
@@ -653,7 +653,7 @@ async def stream_analyze_agent(
                 f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
                 queue,
             )
-            metadata = _build_metadata(extract_json(extraction_response) or {}, document)
+            metadata = build_metadata(extract_json(extraction_response) or {}, document)
             logger.info(
                 "Stream analyze: extraction complete, found %d capabilities",
                 len(metadata.capabilities),
@@ -1204,7 +1204,7 @@ async def analyze_improved_content(
         f"Extract structured metadata from this AGENTS.md content. "
         f"Return ONLY valid JSON.\n\n{content_str}",
     )
-    metadata = _build_metadata(
+    metadata = build_metadata(
         extract_json(extraction_response) or {},
         _parser.parse(content_str),
     )
@@ -2004,64 +2004,6 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
 # ===================================================================
 # SSE Streaming Endpoint (analyze)
 # ===================================================================
-
-
-# ===================================================================
-# Internal Helpers
-# ===================================================================
-
-
-def _build_metadata(
-    data: dict[str, Any],
-    document: Any,
-) -> ExtractedMetadata:
-    """Build ExtractedMetadata from an LLM-extracted dict with fallbacks.
-
-    Args:
-        data: Dict parsed from LLM JSON output.
-        document: ParsedDocument for fallback values (title, etc.).
-    """
-    name = data.get("name") or getattr(document, "title", None) or "Unknown Agent"
-    slug = _generate_slug(data.get("slug") or name)
-
-    def _ensure_list(value: Any) -> list[str]:
-        if isinstance(value, list):
-            return [str(v) for v in value if v]
-        if isinstance(value, str):
-            return [value] if value else []
-        return []
-
-    complexity_val = data.get("complexity", "moderate")
-    if complexity_val not in {"simple", "moderate", "complex"}:
-        complexity_val = "moderate"
-
-    autonomy_val = data.get("autonomy", "hybrid")
-    if autonomy_val not in {"autonomous", "guided", "hybrid"}:
-        autonomy_val = "hybrid"
-
-    return ExtractedMetadata(
-        name=name,
-        slug=slug,
-        description=data.get("description", ""),
-        purpose=data.get("purpose", ""),
-        capabilities=_ensure_list(data.get("capabilities", [])),
-        domains=_ensure_list(data.get("domains", [])),
-        tools=_ensure_list(data.get("tools", [])),
-        behaviors=_ensure_list(data.get("behaviors", [])),
-        triggers=_ensure_list(data.get("triggers", [])),
-        complexity=complexity_val,
-        autonomy=autonomy_val,
-        keywords=_ensure_list(data.get("keywords", [])),
-        summary=data.get("summary", ""),
-    )
-
-
-def _generate_slug(name: str) -> str:
-    """Generate URL-safe slug from name."""
-    slug = name.lower().strip()
-    slug = re.sub(r"[^\w\s-]", "", slug)
-    slug = re.sub(r"[\s_]+", "-", slug)
-    return slug.strip("-") or "unknown"
 
 
 # ===================================================================
