@@ -218,7 +218,7 @@ export class AnalysisAPI {
      */
     async startRecipe(content, overlapAgents) {
         const payload = {
-            recipe_path: 'strategic-differentiation',  // Fixed: was "recipe"
+            recipe_path: 'recipes/differentiate-agent.yaml',  // Full path to actual recipe file
             context: {
                 content: content,
                 overlapping_agents: overlapAgents  // Fixed: was "overlap_agents"
