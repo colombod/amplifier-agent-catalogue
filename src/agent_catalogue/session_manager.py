@@ -169,18 +169,16 @@ class SessionManager:
             self._config.providers[0].module if self._config.providers else None,
         )
 
-        # Override bundle: Providers + basic orchestrator
+        # Override bundle: Providers + explicit orchestrator config
         # Use loop-basic instead of loop-streaming (simpler, no version issues)
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
-            modules={
-                "orchestrator": "loop-basic",  # Simple orchestrator, no streaming complexity
-                "context": "context-simple",
-            },
             session={
                 "default_provider": active_provider,
+                "orchestrator": "loop-basic",  # Simple orchestrator, no version issues
+                "context": "context-simple",
             },
         )
 
