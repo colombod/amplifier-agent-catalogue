@@ -60,4 +60,9 @@ htmlcov/
 Thumbs.db
 
 # Project specific
-*.tmp
+*.tmpserver.pid
+.DS_Store
+*.pid
+*_log.txt
+startup_log.txt
+server.pid

@@ -204,30 +204,39 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
             )
             logger.info("  has 'output': %s", "output" in tool_result)
 
-        # ToolResult has success=True by default - only False if error has content
+        # ToolResult can be either a dict or a Pydantic ToolResult model
         if isinstance(tool_result, dict):
-            # Check if error field has actual content, not just if key exists
+            # Dict form (serialized ToolResult)
             has_error = bool(tool_result.get("error"))
             success = tool_result.get("success", True) if not has_error else False
             output = tool_result.get("output", "")
-            logger.info("  success: %s", success)
-            logger.info("  output type: %s", type(output))
-            if isinstance(output, dict):
-                logger.info("  output keys: %s", list(output.keys()))
-                logger.info(
-                    "  output content preview: %s",
-                    {
-                        k: (
-                            v
-                            if not isinstance(v, (list, str)) or len(str(v)) < 50
-                            else f"{type(v).__name__}[{len(v)}]"
-                        )
-                        for k, v in list(output.items())[:5]
-                    },
-                )
+            logger.info("  tool_result: dict form")
+        elif hasattr(tool_result, "success") and hasattr(tool_result, "output"):
+            # Pydantic ToolResult model
+            success = tool_result.success
+            output = tool_result.output
+            logger.info("  tool_result: Pydantic model form")
         else:
+            # Unknown format - treat as failure
             success = False
             output = ""
+            logger.warning("  tool_result: UNKNOWN FORMAT (not dict, not ToolResult model)")
+
+        logger.info("  success: %s", success)
+        logger.info("  output type: %s", type(output))
+        if isinstance(output, dict):
+            logger.info("  output keys: %s", list(output.keys()))
+            logger.info(
+                "  output content preview: %s",
+                {
+                    k: (
+                        v
+                        if not isinstance(v, (list, str)) or len(str(v)) < 50
+                        else f"{type(v).__name__}[{len(v)}]"
+                    )
+                    for k, v in list(output.items())[:5]
+                },
+            )
 
         # Build informative summary based on tool output structure
         summary = ""
@@ -348,21 +357,43 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
         }
 
     if event == "provider:request":
+        # Debug: log what we're receiving
+        logger.debug("provider:request data keys: %s", list(data.keys()))
+        logger.debug("provider:request data.model: %s", data.get("model", "NOT_FOUND"))
+
+        # Extract model from top-level or request object
+        model = data.get("model", "")
+        if not model and "request" in data:
+            # Fallback: check request object
+            req = data["request"]
+            model = getattr(req, "model", "") if hasattr(req, "model") else ""
+
         return {
             "event": "provider:request",
             "data": {
                 "provider": data.get("provider", ""),
-                "model": data.get("model", ""),
+                "model": model,
             },
         }
 
     if event == "provider:response":
         usage = data.get("usage", {})
+
+        # Debug: log what we're receiving
+        logger.debug("provider:response data keys: %s", list(data.keys()))
+        logger.debug("provider:response has response obj: %s", "response" in data)
+
+        # Extract model from response object (orchestrator contract location)
+        model = data.get("model", "")
+        if not model and "response" in data:
+            resp = data["response"]
+            model = getattr(resp, "model", "") if hasattr(resp, "model") else ""
+
         return {
             "event": "provider:response",
             "data": {
                 "provider": data.get("provider", ""),
-                "model": data.get("model", ""),
+                "model": model,
                 "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
                 "output_tokens": usage.get("output_tokens") if isinstance(usage, dict) else None,
             },

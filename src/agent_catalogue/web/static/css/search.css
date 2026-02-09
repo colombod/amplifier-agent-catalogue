@@ -1,0 +1,100 @@
+    .hyde-doc {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        padding: 0.75rem 1rem;
+        background: var(--bg-secondary);
+        border-radius: 6px;
+        margin-bottom: 1.25rem;
+        cursor: pointer;
+    }
+
+    .hyde-doc summary {
+        font-weight: 600;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+    }
+
+    .hyde-doc-content {
+        margin-top: 0.5rem;
+        font-style: italic;
+        line-height: 1.5;
+    }
+
+    .result-card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        transition: border-color 0.2s;
+    }
+
+    .result-card:hover {
+        border-color: var(--accent);
+    }
+
+    .result-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.5rem;
+    }
+
+    .result-score {
+        font-size: 1.1rem;
+        font-weight: 700;
+        min-width: 45px;
+        text-align: right;
+    }
+
+    .result-score.high {
+        color: #3fb950;
+    }
+
+    .result-score.medium {
+        color: #d29922;
+    }
+
+    .result-score.low {
+        color: var(--text-muted);
+    }
+
+    .result-explanation {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border);
+    }
+
+    .result-meta {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-top: 0.5rem;
+    }
+
+    .empty-search {
+        text-align: center;
+        padding: 3rem 1rem;
+    }
+
+    .empty-search h3 {
+        margin-bottom: 0.5rem;
+    }
+
+    .empty-search p {
+        color: var(--text-muted);
+        margin-bottom: 1.5rem;
+        max-width: 500px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .search-loading {
+        text-align: center;
+        padding: 3rem;
+    }
+
+    .search-loading p {
+        margin-top: 0.5rem;
+    }

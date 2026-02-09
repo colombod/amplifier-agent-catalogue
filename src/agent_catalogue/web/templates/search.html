@@ -3,94 +3,8 @@
 {% block title %}Search Agents - Agent Catalogue{% endblock %}
 
 {% block extra_head %}
-<style>
-    .hyde-doc {
-        font-size: 0.82rem;
-        color: var(--text-muted);
-        padding: 0.75rem 1rem;
-        background: var(--bg-secondary);
-        border-radius: 6px;
-        margin-bottom: 1.25rem;
-        cursor: pointer;
-    }
-
-    .hyde-doc summary {
-        font-weight: 600;
-        font-size: 0.8rem;
-        color: var(--text-muted);
-    }
-
-    .hyde-doc-content {
-        margin-top: 0.5rem;
-        font-style: italic;
-        line-height: 1.5;
-    }
-
-    .result-card {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 1.25rem;
-        margin-bottom: 1rem;
-        transition: border-color 0.2s;
-    }
-
-    .result-card:hover { border-color: var(--accent); }
-
-    .result-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 0.5rem;
-    }
-
-    .result-score {
-        font-size: 1.1rem;
-        font-weight: 700;
-        min-width: 45px;
-        text-align: right;
-    }
-
-    .result-score.high { color: #3fb950; }
-    .result-score.medium { color: #d29922; }
-    .result-score.low { color: var(--text-muted); }
-
-    .result-explanation {
-        font-size: 0.85rem;
-        color: var(--text-muted);
-        margin-top: 0.5rem;
-        padding-top: 0.5rem;
-        border-top: 1px solid var(--border);
-    }
-
-    .result-meta {
-        display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
-        margin-top: 0.5rem;
-    }
-
-    .empty-search {
-        text-align: center;
-        padding: 3rem 1rem;
-    }
-
-    .empty-search h3 { margin-bottom: 0.5rem; }
-
-    .empty-search p {
-        color: var(--text-muted);
-        margin-bottom: 1.5rem;
-        max-width: 500px;
-        margin-left: auto;
-        margin-right: auto;
-    }
-
-    .search-loading {
-        text-align: center;
-        padding: 3rem;
-    }
-
-    .search-loading p { margin-top: 0.5rem; }
-</style>
+<link rel="stylesheet" href="/static/css/components/activity-feed.css">
+<link rel="stylesheet" href="/static/css/search.css">
 {% endblock %}
 
 {% block content %}
@@ -100,9 +14,10 @@
 <div class="card">
     <div class="form-group">
         <label for="search-input">What are you trying to do?</label>
-        <textarea id="search-input" rows="2" placeholder="e.g., I need help developing a python application">{{ query }}</textarea>
+        <textarea id="search-input" rows="2"
+            placeholder="e.g., I need help developing a python application">{{ query }}</textarea>
     </div>
-    <button class="btn btn-primary" id="search-btn" onclick="runSearch()">Search</button>
+    <button class="btn btn-primary" id="search-btn">Search</button>
 </div>
 
 <div id="search-loading" class="hidden">
@@ -116,174 +31,12 @@
 
 <div id="search-results" class="hidden"></div>
 
-{% include "components/activity_feed.html" %}
+<script type="module">
+    import { AnalysisAPI } from '/static/js/api/analysis-api.js';
+    import { SearchController } from '/static/js/controllers/search-controller.js';
 
-<script>
-let searchNarrative = null;
-
-async function runSearch() {
-    const query = document.getElementById('search-input').value.trim();
-    if (!query) return;
-
-    const btn = document.getElementById('search-btn');
-    btn.disabled = true;
-    btn.textContent = 'Searching...';
-
-    document.getElementById('search-loading').classList.remove('hidden');
-    document.getElementById('search-results').classList.add('hidden');
-
-    // Try streaming endpoint first — shows real-time agent reasoning
-    const feedEl = document.getElementById('search-activity-feed');
-    const spinnerWrap = document.getElementById('search-spinner-wrap');
-
-    feedEl.style.display = 'block';
-    spinnerWrap.style.display = 'none';
-
-    const feed = new ActivityFeed('search-activity-feed');
-    try {
-        const data = await feed.start('/api/stream/search-agent', { query });
-        renderResults(data, query);
-        btn.disabled = false;
-        btn.textContent = 'Search';
-        document.getElementById('search-loading').classList.add('hidden');
-        return;
-    } catch {
-        // Streaming failed — fall through to classic endpoint
-        feedEl.style.display = 'none';
-        spinnerWrap.style.display = '';
-    }
-
-    // Fallback: classic non-streaming endpoint
-    const phases = [
-        'Understanding your query...',
-        'Generating search profile...',
-        'Searching the catalogue...',
-        'Evaluating matches...',
-        'Ranking results...'
-    ];
-    let idx = 0;
-    searchNarrative = setInterval(() => {
-        idx = (idx + 1) % phases.length;
-        document.getElementById('search-progress').textContent = phases[idx];
-    }, 2000);
-
-    try {
-        const formData = new FormData();
-        formData.append('query', query);
-
-        const response = await fetch('/api/search-agent', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (searchNarrative) clearInterval(searchNarrative);
-
-        if (!response.ok) {
-            const error = await response.json();
-            showError(error.detail || 'Search failed');
-            return;
-        }
-
-        const data = await response.json();
-        renderResults(data, query);
-
-    } catch (error) {
-        if (searchNarrative) clearInterval(searchNarrative);
-        showError(error.message);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Search';
-        document.getElementById('search-loading').classList.add('hidden');
-    }
-}
-
-function showError(message) {
-    document.getElementById('search-loading').classList.add('hidden');
-    document.getElementById('search-results').classList.remove('hidden');
-    document.getElementById('search-results').innerHTML = `
-        <div class="card" style="margin-top: 1rem;">
-            <p class="text-muted">Search error: ${message}</p>
-        </div>
-    `;
-}
-
-function renderResults(data, query) {
-    const container = document.getElementById('search-results');
-    container.classList.remove('hidden');
-
-    const results = data.results || [];
-
-    if (results.length === 0) {
-        container.innerHTML = `
-            <div class="empty-search">
-                <h3>No matching agents found</h3>
-                <p>No agents in the catalogue match "${escapeHtml(query)}".
-                   This might be a gap worth filling.</p>
-                <a href="/upload" class="btn btn-primary">Upload an Agent</a>
-                <p class="text-muted text-sm" style="margin-top: 1rem;">
-                    Have an AGENTS.md that could help? Upload it to fill this gap.
-                </p>
-            </div>
-        `;
-        return;
-    }
-
-    let html = `<h2 class="mt-2">${results.length} result${results.length !== 1 ? 's' : ''}</h2>`;
-
-    if (data.hypothetical_doc) {
-        html += `
-            <details class="hyde-doc">
-                <summary>How this search worked</summary>
-                <div class="hyde-doc-content">
-                    Your query was translated into this agent profile for matching:<br>
-                    "${escapeHtml(data.hypothetical_doc)}"
-                </div>
-            </details>
-        `;
-    }
-
-    for (const r of results) {
-        const pct = Math.round((r.relevance_score || 0) * 100);
-        const cls = pct >= 70 ? 'high' : pct >= 40 ? 'medium' : 'low';
-
-        html += `
-            <div class="result-card">
-                <div class="result-header">
-                    <div>
-                        <div class="card-title">
-                            <a href="/agent/${r.slug || '#'}">${escapeHtml(r.name || 'Unknown')}</a>
-                        </div>
-                        <div class="card-meta">
-                            ${escapeHtml(r.description || '')}${r.token_count ? ' &middot; ' + r.token_count.toLocaleString() + ' tokens' : ''}
-                        </div>
-                    </div>
-                    <div class="result-score ${cls}">${pct}%</div>
-                </div>
-                ${r.domains && r.domains.length > 0 ? `
-                    <div class="result-meta">
-                        ${r.domains.map(d => `<span class="tag tag-domain">${escapeHtml(d)}</span>`).join('')}
-                        ${(r.capabilities || []).slice(0, 3).map(c => `<span class="tag">${escapeHtml(c)}</span>`).join('')}
-                    </div>
-                ` : ''}
-                ${r.explanation ? `<div class="result-explanation">${escapeHtml(r.explanation)}</div>` : ''}
-            </div>
-        `;
-    }
-
-    container.innerHTML = html;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-document.getElementById('search-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        runSearch();
-    }
-});
+    const api = new AnalysisAPI();
+    const search = new SearchController(api);
+    search.setupEventListeners();
 </script>
 {% endblock %}

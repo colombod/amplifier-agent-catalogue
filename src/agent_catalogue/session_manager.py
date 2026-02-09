@@ -1,11 +1,33 @@
 """SessionManager: core Amplifier integration for the Agent Catalogue web app.
 
-Manages Amplifier session lifecycle using bundle composition:
-- Loads @recipes bundle for recipe execution capabilities
-- Composes with custom Azure/Anthropic providers from app config
-- Creates isolated sessions per recipe execution
-- Mounts catalogue tools for agent operations
-- Persists session transcripts and metadata for observability
+CRITICAL BUNDLE COMPOSITION PATTERN (follows amplifier-app-cli):
+
+1. **Install provider modules FIRST** (startup phase):
+   - Uses uv pip install with git URLs
+   - Installs BOTH provider module code AND SDK dependencies (anthropic, openai)
+   - Without this step, providers fail with "No module named 'anthropic'"
+
+2. **Use foundation as base bundle** (not @recipes):
+   - Foundation is the application base (orchestrator, context, tools, providers)
+   - @recipes is a capability bundle (adds recipes tool only)
+   - Using @recipes as base causes provider mounting to fail
+
+3. **Compose override bundle with source URIs**:
+   - MUST use dict form: {"module": "X", "source": "git+https://..."}
+   - String form ("loop-basic") wipes out source URIs during deep_merge
+   - Without source URIs, module resolver can't find/download modules
+
+4. **Mount custom tools after session creation**:
+   - Python tool objects with runtime dependencies (DB, embedder)
+   - Cannot be declared in YAML (require injected dependencies)
+   - Mount via coordinator.mount("tools", tool, name=...)
+
+This pattern enables:
+- Recipe execution capabilities (tool-recipes)
+- Custom providers from settings.yaml (Azure, Anthropic)
+- Catalogue tools with runtime dependencies
+- Isolated sessions per workflow
+- Session transcripts for observability
 """
 
 from __future__ import annotations
@@ -73,16 +95,27 @@ class SessionManager:
         # Cached prepared bundles (expensive to prepare)
         self._prepared_bundles: dict[str, Any] = {}
 
+        # Sticky workflow sessions (context accumulates across agents)
+        self._sticky_sessions: dict[str, AmplifierSession] = {}
+        self._last_activity: dict[str, datetime] = {}
+
+        # Workflow metadata (preserves analysis results across stages)
+        self._workflow_metadata: dict[str, dict[str, Any]] = {}
+
     async def startup(self, db_repo: Any, embedder: Any) -> None:
         """Initialize the session manager. Called during FastAPI lifespan startup.
 
-        Loads and prepares the @recipes bundle with custom providers.
+        Installs provider modules (with SDK dependencies), then loads and prepares
+        the foundation bundle with custom providers.
         Subsequent session creations reuse the prepared bundle.
         """
         self._db_repo = db_repo
         self._embedder = embedder
 
-        # Pre-load and prepare the recipes bundle for fast session creation
+        # Install provider modules and their SDK dependencies (anthropic, openai, etc.)
+        await self._install_providers()
+
+        # Pre-load and prepare the foundation bundle for fast session creation
         await self._get_recipes_bundle()
 
         logger.info(
@@ -94,49 +127,108 @@ class SessionManager:
         """Clean up all active sessions. Called during FastAPI lifespan shutdown."""
         for workflow_id in list(self._active_sessions.keys()):
             await self.close_workflow(workflow_id)
+        for workflow_id in list(self._sticky_sessions.keys()):
+            await self.cleanup_workflow(workflow_id)
         logger.info("SessionManager shut down, all sessions cleaned up")
 
     # -- Bundle Loading & Composition ------------------------------------
 
+    async def _install_providers(self) -> None:
+        """Install provider modules and their SDK dependencies.
+
+        Uses uv pip install with git URLs to install both the provider module
+        code AND its dependencies (anthropic, openai SDKs, etc.).
+
+        This follows the amplifier-app-cli pattern from install_known_providers().
+        """
+        import subprocess
+        import sys
+
+        # Well-known provider sources (from amplifier-app-cli DEFAULT_PROVIDER_SOURCES)
+        KNOWN_PROVIDER_SOURCES = {
+            "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
+            "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+            "provider-azure-openai": "git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main",
+        }
+
+        # Get providers configured in settings
+        providers_to_install = [
+            p.module for p in self._config.providers if p.module in KNOWN_PROVIDER_SOURCES
+        ]
+
+        if not providers_to_install:
+            logger.info("No known providers to install")
+            return
+
+        logger.info(f"Installing providers: {providers_to_install}")
+
+        for provider_module in providers_to_install:
+            source = KNOWN_PROVIDER_SOURCES[provider_module]
+            logger.info(f"Installing {provider_module} from {source}...")
+
+            try:
+                # Use uv pip install to install the provider module + dependencies
+                # --python sys.executable ensures it goes into current venv
+                subprocess.run(
+                    ["uv", "pip", "install", "--python", sys.executable, source],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                logger.info(f"✓ Installed {provider_module}")
+
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to install {provider_module}: {e.stderr}")
+                raise RuntimeError(f"Provider installation failed: {provider_module}") from e
+
     async def _get_recipes_bundle(self) -> Any:
-        """Get the prepared @recipes bundle with custom providers.
+        """Get the prepared foundation bundle with custom providers and recipes tool.
+
+        Uses foundation as the base (application foundation) and adds:
+        - Custom providers from settings.yaml
+        - tool-recipes for recipe execution capabilities
+        - Custom orchestrator/context configuration
 
         Cached for performance - prepare() downloads modules, which is expensive.
         """
         if "recipes" not in self._prepared_bundles:
-            logger.info("Loading @recipes bundle...")
+            logger.info("Loading foundation bundle...")
 
-            # 1. Load @recipes bundle (includes foundation + tool-recipes)
-            recipes_bundle = await load_bundle(
-                "git+https://github.com/microsoft/amplifier-bundle-recipes@main"
+            # 1. Load foundation bundle (the application base)
+            foundation_bundle = await load_bundle(
+                "git+https://github.com/microsoft/amplifier-foundation@main"
             )
-            logger.info("Loaded @recipes bundle: %s", recipes_bundle.name)
+            logger.info("Loaded foundation bundle: %s", foundation_bundle.name)
 
             # 2. Create override bundle with custom app config
             override = self._create_override_bundle()
 
-            # 3. Compose recipes + override
-            composed = recipes_bundle.compose(override)
-            logger.info("Composed bundle with custom providers")
+            # 3. Compose foundation + override
+            composed = foundation_bundle.compose(override)
+            logger.info("Composed bundle with custom providers and recipes tool")
 
-            # 4. Prepare (download/install modules) - cache this result
-            await composed.prepare(install_deps=True)
+            # 4. Prepare (download/install modules) - returns PreparedBundle
+            prepared = await composed.prepare(install_deps=True)
             logger.info("Prepared bundle (modules installed)")
+            logger.info(f"Prepared bundle type: {type(prepared).__name__}")
 
-            self._prepared_bundles["recipes"] = composed
+            self._prepared_bundles["recipes"] = prepared
 
         return self._prepared_bundles["recipes"]
 
     def _create_override_bundle(self) -> Bundle:
-        """Create override bundle with custom providers and session config.
+        """Create override bundle with custom providers, tools, and config.
 
-        Only includes app-specific configuration:
+        Adds to foundation:
         - Custom providers (Azure, Anthropic) from settings.yaml
-        - Session preferences (orchestrator, context, default provider)
+        - tool-recipes for recipe execution capabilities
+        - default_provider selection (REQUIRED to activate providers)
+        - Custom orchestrator (loop-basic) and context (context-simple)
 
-        Does NOT include:
-        - tool-recipes (comes from @recipes)
-        - Foundation tools (come via @recipes -> foundation)
+        Foundation provides (inherited via compose):
+        - All standard tools (filesystem, bash, web, search, delegate)
+        - Base orchestrator/context modules (overridden here)
+        - Hook system and event infrastructure
         """
         # Build providers list from app config
         providers = []
@@ -159,31 +251,38 @@ class SessionManager:
 
             providers.append(provider_config)
 
-        # Find active provider (priority=1)
+        # Find active provider (priority=1) - REQUIRED to activate providers
         active_provider = next(
             (p.module for p in self._config.providers if p.is_active),
             self._config.providers[0].module if self._config.providers else None,
         )
 
+        # Add tool-recipes for recipe execution capabilities
+        tools = [
+            {
+                "module": "tool-recipes",
+                "source": "git+https://github.com/microsoft/amplifier-bundle-recipes@main#subdirectory=modules/tool-recipes",
+            }
+        ]
+
+        # Override bundle: Providers + tools + explicit orchestrator/context configs
+        # CRITICAL: Use dict form with source URIs to preserve module resolution
+        # String form would wipe out foundation's source URIs during compose()
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
+            tools=tools,
             session={
+                "default_provider": active_provider,
                 "orchestrator": {
-                    "module": "loop-streaming",
-                    "config": {
-                        "max_iterations": 15,
-                    },
+                    "module": "loop-basic",
+                    "source": "git+https://github.com/microsoft/amplifier-module-loop-basic@main",
                 },
                 "context": {
                     "module": "context-simple",
-                    "config": {
-                        "max_tokens": 200_000,
-                        "compact_threshold": 0.85,
-                    },
+                    "source": "git+https://github.com/microsoft/amplifier-module-context-simple@main",
                 },
-                "default_provider": active_provider,
             },
         )
 
@@ -210,17 +309,11 @@ class SessionManager:
         else:
             raise ValueError(f"Unknown bundle type: {bundle_type}")
 
-        # Get mount plan from prepared bundle
-        mount_plan = prepared_bundle.to_mount_plan()
-
-        # Create and initialize session with the composed mount plan
-        session = AmplifierSession(
-            config=mount_plan,
+        # Use PreparedBundle.create_session() - handles resolver mounting, initialization, etc.
+        session = await prepared_bundle.create_session(
             session_id=session_id,
             parent_id=parent_id,
         )
-
-        await session.initialize()
 
         logger.info(
             "Created session %s from %s bundle (parent=%s)",
@@ -280,6 +373,9 @@ class SessionManager:
                 parent_id=parent_session.session_id,
             )
 
+            # Mount catalogue tools so recipe steps can access get_agent_content, etc.
+            await self._mount_catalogue_tools(child)
+
             try:
                 # Execute instruction on child
                 response = await child.execute(instruction)
@@ -309,6 +405,24 @@ class SessionManager:
             session_id=session_id,
         )
 
+    # -- Tool Mounting --------------------------------------------------
+
+    async def _mount_catalogue_tools(self, session: AmplifierSession) -> None:
+        """Mount catalogue-specific tools onto a session.
+
+        Creates and mounts the 8 custom catalogue tools that require
+        runtime dependencies (db_repo, embedder). Called after session
+        creation to add catalogue capabilities.
+
+        Tools mounted: search_similar, list_agents, get_agent,
+        get_agent_by_slug, get_agent_content, store_agent,
+        get_catalogue_stats, compute_embedding
+        """
+        tools = create_catalogue_tools(self._db_repo, self._embedder)
+        for tool in tools:
+            await session.coordinator.mount("tools", tool, name=tool.name)
+        logger.debug("Mounted %d catalogue tools on session %s", len(tools), session.session_id)
+
     # -- Workflow Sessions ----------------------------------------------
 
     async def create_workflow(self, workflow_id: str) -> AmplifierSession:
@@ -323,9 +437,7 @@ class SessionManager:
         )
 
         # Mount catalogue tools with app dependencies
-        tools = create_catalogue_tools(self._db_repo, self._embedder)
-        for tool in tools:
-            await session.coordinator.mount("tools", tool, name=tool.name)
+        await self._mount_catalogue_tools(session)
 
         # Register SSE hooks for real-time streaming
         unregisters = self.sse_bridge.register_hooks(session, workflow_id)
@@ -419,18 +531,7 @@ class SessionManager:
         await context.add_message({"role": "system", "content": system_prompt})
 
         # Mount catalogue tools
-        logger.info(
-            "Creating catalogue tools (db_repo=%s, embedder=%s)",
-            type(self._db_repo).__name__,
-            type(self._embedder).__name__,
-        )
-        tools = create_catalogue_tools(self._db_repo, self._embedder)
-        logger.info("Created %d tools: %s", len(tools), [t.name for t in tools])
-
-        for tool in tools:
-            logger.info("Mounting tool: %s", tool.name)
-            await child.coordinator.mount("tools", tool, name=tool.name)
-            logger.info("✓ Mounted tool: %s", tool.name)
+        await self._mount_catalogue_tools(child)
 
         # Register SSE hooks (events carry parent_id -> route to parent's queue)
         parent_workflow_id = parent.session_id
@@ -474,9 +575,7 @@ class SessionManager:
         await context.add_message({"role": "system", "content": system_prompt})
 
         # Mount catalogue tools
-        tools = create_catalogue_tools(self._db_repo, self._embedder)
-        for tool in tools:
-            await session.coordinator.mount("tools", tool, name=tool.name)
+        await self._mount_catalogue_tools(session)
 
         try:
             return await session.execute(instruction)
@@ -510,9 +609,7 @@ class SessionManager:
         await context.add_message({"role": "system", "content": system_prompt})
 
         # Mount catalogue tools
-        tools = create_catalogue_tools(self._db_repo, self._embedder)
-        for tool in tools:
-            await session.coordinator.mount("tools", tool, name=tool.name)
+        await self._mount_catalogue_tools(session)
 
         # Register SSE hooks for real-time streaming
         sid = session.session_id
@@ -534,6 +631,135 @@ class SessionManager:
                     pass
             self.sse_bridge.remove_queue(sid)
             await session.cleanup()
+
+    # -- Sticky Workflow Sessions (Phase 1) -----------------------------
+
+    async def run_with_sticky_session(
+        self,
+        workflow_id: str,
+        agent_name: str,
+        instruction: str,
+        event_queue: asyncio.Queue | None = None,
+    ) -> str:
+        """Run agent in a sticky session that persists across the workflow.
+
+        Creates a session on first call for this workflow_id, then reuses it
+        for subsequent agents. Context accumulates across all agent executions.
+
+        Args:
+            workflow_id: Unique identifier for the upload workflow (from frontend)
+            agent_name: Name of specialist agent to run
+            instruction: Prompt for the agent
+            event_queue: Optional SSE event queue for streaming
+
+        Returns:
+            Agent response string
+
+        Lifecycle:
+            - First call: Creates session, injects agent prompt, executes
+            - Subsequent calls: Injects new agent prompt, executes (context preserved)
+            - Cleanup: Call cleanup_workflow() when workflow completes
+        """
+        logger.info(
+            "Sticky session: workflow=%s agent=%s instruction_length=%d",
+            workflow_id,
+            agent_name,
+            len(instruction),
+        )
+
+        # Create session if first time for this workflow
+        if workflow_id not in self._sticky_sessions:
+            logger.info("Creating new sticky session for workflow=%s", workflow_id)
+            session = await self._create_session_from_bundle(bundle_type="recipes")
+            await self._mount_catalogue_tools(session)
+            self._sticky_sessions[workflow_id] = session
+            logger.info("Sticky session created: session_id=%s", session.session_id)
+        else:
+            logger.info("Reusing sticky session for workflow=%s", workflow_id)
+
+        session = self._sticky_sessions[workflow_id]
+        self._last_activity[workflow_id] = datetime.now(UTC)
+
+        # Build agent-specific system prompt
+        system_prompt = self._build_agent_prompt(agent_name)
+
+        # Inject agent prompt into session context
+        context = session.coordinator.get("context")
+        await context.add_message({"role": "system", "content": system_prompt})
+
+        # Register SSE hooks if streaming
+        unregisters = []
+        if event_queue:
+            sid = session.session_id
+            logger.info("Registering SSE hooks for session %s (agent=%s)", sid, agent_name)
+            unregisters = self.sse_bridge.register_hooks(
+                session, workflow_id, agent_name=agent_name
+            )
+            self.sse_bridge._queues[workflow_id] = event_queue
+            logger.info("SSE bridge queue mapped for workflow %s", workflow_id)
+
+        try:
+            response = await session.execute(instruction)
+            logger.info("Sticky session agent %s completed", agent_name)
+            return response
+        finally:
+            # Unregister SSE hooks but keep session alive
+            for unreg in unregisters:
+                try:
+                    unreg()
+                except Exception:
+                    pass
+            if event_queue:
+                self.sse_bridge.remove_queue(workflow_id)
+
+    def set_workflow_metadata(self, workflow_id: str, key: str, value: Any) -> None:
+        """Store metadata for a workflow (preserves analysis results across stages).
+
+        Use this to store:
+        - similar_agents: List of overlapping agents with similarity scores
+        - highest_similarity: Float score for decision-making
+        - extraction_metadata: Structured agent metadata from extractor
+        - classification: Domain/tag classification results
+
+        This data enriches agent prompts with context from prior stages.
+        """
+        if workflow_id not in self._workflow_metadata:
+            self._workflow_metadata[workflow_id] = {}
+        self._workflow_metadata[workflow_id][key] = value
+        logger.debug("Stored workflow metadata: workflow=%s key=%s", workflow_id, key)
+
+    def get_workflow_metadata(self, workflow_id: str, key: str, default: Any = None) -> Any:
+        """Retrieve metadata for a workflow."""
+        return self._workflow_metadata.get(workflow_id, {}).get(key, default)
+
+    def get_all_workflow_metadata(self, workflow_id: str) -> dict[str, Any]:
+        """Get all metadata for a workflow."""
+        return self._workflow_metadata.get(workflow_id, {})
+
+    async def cleanup_workflow(self, workflow_id: str) -> None:
+        """Dispose of sticky session and free resources.
+
+        Call when workflow completes (success) or is cancelled.
+        """
+        if workflow_id not in self._sticky_sessions:
+            return
+
+        logger.info("Cleaning up sticky session for workflow=%s", workflow_id)
+        session = self._sticky_sessions[workflow_id]
+
+        try:
+            await session.cleanup()
+        except Exception:
+            logger.warning(
+                "Error during session cleanup for workflow=%s", workflow_id, exc_info=True
+            )
+        finally:
+            del self._sticky_sessions[workflow_id]
+            if workflow_id in self._last_activity:
+                del self._last_activity[workflow_id]
+            if workflow_id in self._workflow_metadata:
+                del self._workflow_metadata[workflow_id]
+            logger.info("Sticky session cleaned up: workflow=%s", workflow_id)
 
     # -- Session Persistence --------------------------------------------
 

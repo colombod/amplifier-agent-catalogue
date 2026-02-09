@@ -1,91 +1,3 @@
-<!-- Activity Feed Component: Real-time SSE event display for LLM operations -->
-<style>
-.activity-feed {
-    max-height: 260px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.5rem 0.75rem;
-    margin: 0.75rem 0;
-    font-size: 0.78rem;
-    background: var(--bg-secondary);
-    line-height: 1.5;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-}
-
-.activity-feed:empty { display: none; }
-
-.af-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.25rem 0;
-    animation: af-fade 0.25s ease;
-}
-
-.af-item + .af-item {
-    border-top: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
-}
-
-.af-icon {
-    flex-shrink: 0;
-    width: 18px;
-    text-align: center;
-    font-size: 0.82rem;
-    line-height: 1.5;
-    opacity: 0.7;
-}
-
-.af-text {
-    flex: 1;
-    color: var(--text-muted);
-    word-break: break-word;
-}
-
-.af-text strong { color: var(--accent, #58a6ff); font-weight: 600; }
-
-/* Phase / running step: pulsing accent */
-.af-item.phase .af-icon { color: var(--accent, #58a6ff); }
-.af-item.phase.running .af-icon {
-    animation: af-pulse 1.4s ease-in-out infinite;
-}
-.af-item.phase .af-text { color: var(--accent, #58a6ff); font-weight: 600; }
-
-/* Done: green check */
-.af-item.done .af-icon { color: var(--success, #3fb950); animation: none; }
-.af-item.done .af-text { color: var(--success, #3fb950); }
-
-/* Tool calls */
-.af-item.tool .af-icon { color: var(--warning, #d29922); }
-.af-item.tool .af-text .tool-name { color: var(--warning, #d29922); font-weight: 600; }
-
-/* Content / thinking - muted reasoning */
-.af-item.content .af-text { color: var(--text-muted); font-style: italic; }
-
-/* LLM provider call */
-.af-item.provider .af-icon { color: var(--accent, #58a6ff); }
-.af-item.provider .af-text { color: var(--text-muted); }
-
-/* Error */
-.af-item.error .af-icon,
-.af-item.error .af-text { color: var(--danger, #f85149); }
-
-/* Sub-detail line */
-.af-item.detail { padding-left: 1.5rem; }
-.af-item.detail .af-icon { font-size: 0.7rem; }
-
-@keyframes af-fade {
-    from { opacity: 0; transform: translateY(-3px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes af-pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
-}
-</style>
-
-<script>
 /**
  * ActivityFeed — real-time SSE event viewer for Amplifier kernel events.
  *
@@ -101,8 +13,10 @@
  *   phase                          — Workflow phase transitions
  *   result                         — Final result payload
  *   error                          — Error message
+ * 
+ * @module components/activity-feed
  */
-class ActivityFeed {
+export class ActivityFeed {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this._items = [];
@@ -120,6 +34,7 @@ class ActivityFeed {
      * Returns a promise that resolves with the "result" event payload.
      */
     start(url, payload) {
+        console.log('[ActivityFeed] Starting SSE stream', { url, payloadSize: JSON.stringify(payload).length });
         this.clear();
         this._resolved = false;
 
@@ -131,9 +46,12 @@ class ActivityFeed {
                     body: JSON.stringify(payload),
                 });
 
+                console.log('[ActivityFeed] Fetch response received', { status: resp.status, ok: resp.ok });
+
                 if (!resp.ok) {
                     let detail = `HTTP ${resp.status}`;
-                    try { detail = (await resp.json()).detail || detail; } catch {}
+                    try { detail = (await resp.json()).detail || detail; } catch { }
+                    console.error('[ActivityFeed] Fetch failed', { url, status: resp.status, detail });
                     return reject(new Error(detail));
                 }
 
@@ -166,8 +84,12 @@ class ActivityFeed {
                         }
                         if (!evData) continue;
                         try {
-                            this._dispatch(evType, JSON.parse(evData), resolve, reject);
-                        } catch { /* skip unparseable */ }
+                            const parsedData = JSON.parse(evData);
+                            console.log('[SSE] ✅', evType, parsedData);
+                            this._dispatch(evType, parsedData, resolve, reject);
+                        } catch (err) { 
+                            console.error('[SSE] ❌ Parse error -', 'type:', evType, 'raw:', evData, 'error:', err);
+                        }
                     }
                 }
 
@@ -234,7 +156,7 @@ class ActivityFeed {
                 const fullText = data.full_text || data.text_preview || '';
                 const len = data.text_length || 0;
                 const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
-                
+
                 if (btype === 'thinking' && fullText) {
                     // Show reasoning summary
                     const lines = fullText.split('\n').filter(l => l.trim());
@@ -245,7 +167,7 @@ class ActivityFeed {
                 } else if (btype === 'text' && fullText) {
                     // Show the actual response content with detailed JSON extraction
                     let displayParts = [];
-                    
+
                     // Try to parse as JSON and show structured details
                     if (fullText.trim().startsWith('{') || fullText.includes('```json')) {
                         try {
@@ -255,21 +177,21 @@ class ActivityFeed {
                             if (jsonMatch) {
                                 jsonText = jsonMatch[1];
                             }
-                            
+
                             const parsed = JSON.parse(jsonText.trim());
-                            
+
                             // Show key summary info
                             if (parsed.overall_score || parsed.grade) {
                                 const score = parsed.overall_score ? `${parsed.overall_score}/10` : '';
                                 const grade = parsed.grade || '';
                                 displayParts.push(`<strong>Quality: ${score} (${grade})</strong>`);
                             }
-                            
+
                             // Show summary if present
                             if (parsed.summary) {
                                 displayParts.push(this._esc(parsed.summary.substring(0, 300)));
                             }
-                            
+
                             // Show issues with severity
                             if (parsed.issues && Array.isArray(parsed.issues) && parsed.issues.length > 0) {
                                 const critical = parsed.issues.filter(i => i.severity === 'critical').length;
@@ -281,13 +203,13 @@ class ActivityFeed {
                                     minor ? `${minor} minor` : null
                                 ].filter(Boolean).join(', ');
                                 displayParts.push(`<span style="color: var(--warning)">Issues: ${issueBreakdown}</span>`);
-                                
+
                                 // Show first issue detail
                                 if (parsed.issues[0] && parsed.issues[0].description) {
                                     displayParts.push(`• ${this._esc(parsed.issues[0].description.substring(0, 200))}`);
                                 }
                             }
-                            
+
                             // Show strengths
                             if (parsed.strengths && Array.isArray(parsed.strengths) && parsed.strengths.length > 0) {
                                 displayParts.push(`<span style="color: var(--success)">Strengths: ${parsed.strengths.length}</span>`);
@@ -295,12 +217,12 @@ class ActivityFeed {
                                     displayParts.push(`• ${this._esc(parsed.strengths[0].substring(0, 200))}`);
                                 }
                             }
-                            
+
                             // Show capabilities if present
                             if (parsed.capabilities && Array.isArray(parsed.capabilities)) {
                                 displayParts.push(`Capabilities: ${parsed.capabilities.length}`);
                             }
-                            
+
                             if (displayParts.length > 0) {
                                 // Add each part as a separate line for readability
                                 displayParts.forEach((part, idx) => {
@@ -434,4 +356,3 @@ class ActivityFeed {
         return d.innerHTML;
     }
 }
-</script>
