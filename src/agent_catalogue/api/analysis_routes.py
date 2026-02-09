@@ -535,11 +535,14 @@ async def refine_agent_content(
     request: Request,
     body: RefineRequest,
 ) -> RefineResponse:
-    """Refine content to reduce overlap using strategic differentiation.
+    """DEPRECATED: Use /api/stream/refine instead for real-time feedback.
+
+    Refine content to reduce overlap using strategic differentiation.
 
     Uses the differentiator agent (not improver) which has frameworks for
     niche-carving: narrow scope, different method, adjacent positioning, etc.
     """
+    logger.warning("DEPRECATED: /api/refine called - use /api/stream/refine instead")
     logger.info("=" * 80)
     logger.info("POST /api/refine - Pattern 1 Quick Refinement")
     logger.info("  Content length: %d", len(body.content))

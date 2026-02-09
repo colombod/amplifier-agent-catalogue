@@ -171,41 +171,28 @@ export class AnalysisAPI {
     }
 
     /**
-     * Quick refinement to reduce overlap with similar agents.
+     * Quick refinement to reduce overlap with similar agents (SSE streaming).
      * 
      * @param {string} content - Original agent content
      * @param {Array<Object>} overlapAgents - List of overlapping agents with similarity data
+     * @param {string} activityFeedId - Activity feed element ID for SSE events
      * @returns {Promise<Object>} Refinement result with refined_content
      * @throws {Error} If refinement fails
      */
-    async refine(content, overlapAgents) {
+    async refine(content, overlapAgents, activityFeedId) {
         const payload = {
             content: content,
-            overlapping_agents: overlapAgents  // Fixed: was "overlap_agents"
+            overlapping_agents: overlapAgents
         };
         
-        console.log('[API] refine() called', { 
-            url: '/api/refine', 
+        console.log('[API] refine() called (streaming)', { 
+            url: '/api/stream/refine', 
             contentLength: content.length,
             agentCount: overlapAgents.length,
-            payload 
+            activityFeedId
         });
 
-        const response = await fetch('/api/refine', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            console.error('[API] refine() failed', { status: response.status, error });
-            throw new Error(error.detail || `Refinement failed: ${response.status}`);
-        }
-
-        const result = await response.json();
-        console.log('[API] refine() success', { hasRefinedContent: !!result.refined_content });
-        return result;
+        return this._handleSSEStream('/api/stream/refine', payload, activityFeedId, 'result');
     }
 
     /**

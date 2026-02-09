@@ -167,10 +167,13 @@
                 </div>
 
                 <!-- Pattern 1 Loading State -->
-                <div class="hidden" id="step-3-loading" style="text-align: center; padding: 2rem;">
-                    <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
-                    <p class="mt-1">Refining agent to reduce overlap...</p>
-                    <p class="text-muted text-sm" id="step-3-progress">Analyzing overlapping capabilities</p>
+                <div class="hidden" id="step-3-loading">
+                    <div style="text-align: center; padding: 1rem 2rem 0.5rem;" id="step-3-spinner-wrap">
+                        <span class="loading-spinner" style="width: 32px; height: 32px; border-width: 3px;"></span>
+                        <p class="mt-1">Refining agent to reduce overlap...</p>
+                        <p class="text-muted text-sm" id="step-3-progress">Analyzing overlapping capabilities</p>
+                    </div>
+                    <div id="refine-activity-feed" class="activity-feed" style="display:none;"></div>
                 </div>
 
                 <!-- Refined Content Display (after Pattern 1 or 2) -->

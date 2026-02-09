@@ -772,25 +772,23 @@ export class UploadController {
 
         document.getElementById('pattern-picker')?.classList.add('hidden');
         
-        // Show loading state with progress narrative
+        // Show loading state with activity feed (SSE streaming)
         document.getElementById('step-3-loading')?.classList.remove('hidden');
         this.steps.setStepSummary(3, 'Refining to reduce overlap...');
         
-        const narrative = this.startProgressNarrative('step-3-progress', [
-            'Analyzing overlapping capabilities...',
-            'Identifying unique differentiation angles...',
-            'Removing duplicated coverage...',
-            'Sharpening the agent niche...',
-            'Optimizing token efficiency...'
-        ], 3000);
+        // Show activity feed, hide static spinner
+        const feedEl = document.getElementById('refine-activity-feed');
+        const spinnerWrap = document.getElementById('step-3-spinner-wrap');
+        if (feedEl) feedEl.style.display = 'block';
+        if (spinnerWrap) spinnerWrap.style.display = 'none';
 
         try {
             const data = await this.api.refine(
                 this.state.improvedContent || this.state.originalContent,
-                [window._lastOverlapAgents[0]]
+                [window._lastOverlapAgents[0]],
+                'refine-activity-feed'  // SSE events go here
             );
             
-            clearInterval(narrative);
             document.getElementById('step-3-loading')?.classList.add('hidden');
             
             this.state.improvedContent = data.refined_content;
@@ -803,7 +801,6 @@ export class UploadController {
             this.steps.enableStep4(this.state);
 
         } catch (error) {
-            clearInterval(narrative);
             document.getElementById('step-3-loading')?.classList.add('hidden');
             this.steps.setStepSummary(3, 'Refinement failed');
             alert(`Pattern 1 failed: ${error.message}. Please try again or choose Pattern 2.`);

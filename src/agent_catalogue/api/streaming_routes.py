@@ -558,3 +558,152 @@ async def stream_improve(request: Request) -> StreamingResponse:
             yield f"event: {event_type}\ndata: {payload}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/api/stream/refine")
+async def stream_refine(request: Request) -> StreamingResponse:
+    """SSE streaming version of refine - shows differentiator agent reasoning.
+
+    Emits kernel events (thinking, tool calls) as they happen during
+    strategic differentiation to reduce overlap with existing agents.
+    """
+    from uuid import UUID
+
+    body = await request.json()
+    content_str = body.get("content", "")
+    overlapping = body.get("overlapping_agents", [])
+
+    if not content_str:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    session_mgr = request.app.state.session_mgr
+    db_repo = request.app.state.db_repo
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _emit(event: str, data: dict[str, Any]) -> None:
+        await queue.put({"event": event, "data": data})
+
+    async def run() -> None:
+        try:
+            # Phase: refining
+            await _emit(
+                "phase",
+                {
+                    "phase": "refining",
+                    "message": "Differentiator agent applying strategic frameworks...",
+                    "agent_name": "differentiator",
+                },
+            )
+
+            # Build detailed overlap context with FULL agent content
+            agent_ids = [agent.get("id") for agent in overlapping if agent.get("id")]
+
+            # Fetch full agent content for strategic analysis
+            full_agents = []
+            for agent_id in agent_ids[:3]:  # Limit to top 3
+                try:
+                    agent_uuid = UUID(agent_id)
+                    agent_summary = db_repo.get_agent(agent_uuid)
+                    metadata = db_repo.get_agent_metadata(agent_uuid)
+                    versions = db_repo.get_agent_versions(agent_uuid)
+                    latest_content = versions[0].raw_content if versions else ""
+
+                    full_agents.append(
+                        {
+                            "name": agent_summary.name,
+                            "description": agent_summary.description,
+                            "capabilities": metadata.get("capabilities", []),
+                            "domains": metadata.get("domains", []),
+                            "tools": metadata.get("tools", []),
+                            "full_content": latest_content[:2000],
+                        }
+                    )
+                except Exception:
+                    logger.warning("Could not fetch full content for agent %s", agent_id)
+                    continue
+
+            # Build strategic refinement prompt
+            agents_detail = []
+            for i, agent in enumerate(full_agents, 1):
+                caps = ", ".join(agent["capabilities"][:5]) or "none"
+                doms = ", ".join(agent["domains"][:5]) or "none"
+                tls = ", ".join(agent["tools"][:5]) or "none"
+                agents_detail.append(
+                    f"{i}. **{agent['name']}\n"
+                    f"   Description: {agent['description']}\n"
+                    f"   Capabilities: {caps}\n"
+                    f"   Domains: {doms}\n"
+                    f"   Tools: {tls}\n"
+                    f"   Content preview: {agent['full_content'][:500]}..."
+                )
+
+            agents_text = "\n\n".join(agents_detail)
+            token_count = count_tokens(content_str)
+
+            refine_prompt = (
+                f"Apply strategic differentiation to reduce overlap.\n\n"
+                f"<current_content>\n{content_str}\n</current_content>\n\n"
+                f"<overlapping_agents>\n"
+                f"These agents overlap significantly. Study their FULL positioning:\n\n"
+                f"{agents_text}\n"
+                f"</overlapping_agents>\n\n"
+                f"Use your differentiation frameworks:\n"
+                f"1. **Narrow Scope**: Focus on subset nobody covers deeply\n"
+                f"2. **Different Method**: Same problem, different approach\n"
+                f"3. **Adjacent Niche**: Related but distinct need\n"
+                f"4. **Unique Combo**: Intersection nobody else covers\n"
+                f"5. **Different Audience**: Specialize for user segment\n\n"
+                f"Apply the MOST APPROPRIATE framework to create clear differentiation.\n\n"
+                f"Rules:\n"
+                f"- Preserve agent name and core mission\n"
+                f"- Be SPECIFIC about what this agent does NOT do\n"
+                f"- Add 'Defers to' statements referencing overlapping agents by name\n"
+                f"- Remove or reframe any capability that overlaps >50% with existing agents\n"
+                f"- Current: {token_count} tokens. Keep under 1500.\n\n"
+                f"Output ONLY refined AGENTS.md markdown. No preamble, no code fences."
+            )
+
+            # Run differentiator with streaming
+            refined_raw = await session_mgr.run_one_shot_streaming(
+                "differentiator", refine_prompt, queue
+            )
+
+            if not refined_raw or len(refined_raw.strip()) < 100:
+                raise HTTPException(
+                    status_code=500, detail="Differentiator returned insufficient output"
+                )
+
+            refined = strip_preamble(refined_raw)
+            changes = compute_diff_sections(content_str, refined)
+            token_metrics = to_token_metrics(refined)
+
+            # Emit final result
+            await _emit(
+                "result",
+                {
+                    "refined_content": refined,
+                    "original_content": content_str,
+                    "changes": changes,
+                    "token_metrics": token_metrics,
+                },
+            )
+
+        except Exception as e:
+            logger.exception("SSE refine failed")
+            await _emit("error", {"message": str(e)})
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(run())
+
+    async def event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            event_type = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}))
+            yield f"event: {event_type}\ndata: {payload}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
