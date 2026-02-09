@@ -216,6 +216,10 @@ async def stream_analyze_agent(
                         "domains": metadata.domains,
                         "keywords": metadata.keywords,
                         "complexity": metadata.complexity,
+                        "autonomy": metadata.autonomy,
+                        "tools": metadata.tools,
+                        "behaviors": metadata.behaviors,
+                        "triggers": metadata.triggers,
                     },
                     "similar_agents": [
                         {

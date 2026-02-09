@@ -52,6 +52,17 @@ export class UploadRenderer {
     displayAnalysis(data, steps, state) {
         const meta = data.metadata;
 
+        // Defensive: ensure arrays exist to prevent .map() crashes
+        meta.domains = meta.domains || [];
+        meta.capabilities = meta.capabilities || [];
+        meta.tools = meta.tools || [];
+
+        console.log('displayAnalysis called with:', {
+            hasMetadata: !!meta,
+            name: meta.name,
+            fieldCount: Object.keys(meta).length
+        });
+
         // Step 1: Mark completed
         steps.setStepState(1, 'completed');
 
@@ -62,13 +73,13 @@ export class UploadRenderer {
         document.getElementById('step-2-content').classList.remove('hidden');
 
         document.getElementById('metadata-display').innerHTML = `
-            <dt>Name</dt><dd>${meta.name}</dd>
-            <dt>Purpose</dt><dd>${meta.purpose}</dd>
-            <dt>Complexity</dt><dd>${meta.complexity}</dd>
-            <dt>Autonomy</dt><dd>${meta.autonomy}</dd>
-            <dt>Domains</dt><dd><div class="tag-list">${meta.domains.map(d => `<span class="tag tag-domain">${d}</span>`).join('')}</div></dd>
-            <dt>Capabilities</dt><dd><div class="tag-list">${meta.capabilities.map(c => `<span class="tag">${c}</span>`).join('')}</div></dd>
-            <dt>Tools</dt><dd><div class="tag-list">${meta.tools.map(t => `<span class="tag tag-tool">${t}</span>`).join('')}</div></dd>
+            <dt>Name</dt><dd>${meta.name || 'Unknown'}</dd>
+            <dt>Purpose</dt><dd>${meta.purpose || 'Not specified'}</dd>
+            <dt>Complexity</dt><dd>${meta.complexity || 'moderate'}</dd>
+            <dt>Autonomy</dt><dd>${meta.autonomy || 'hybrid'}</dd>
+            <dt>Domains</dt><dd><div class="tag-list">${meta.domains.map(d => `<span class="tag tag-domain">${d}</span>`).join('') || '<em>None</em>'}</div></dd>
+            <dt>Capabilities</dt><dd><div class="tag-list">${meta.capabilities.map(c => `<span class="tag">${c}</span>`).join('') || '<em>None</em>'}</div></dd>
+            <dt>Tools</dt><dd><div class="tag-list">${meta.tools.map(t => `<span class="tag tag-tool">${t}</span>`).join('') || '<em>None</em>'}</div></dd>
         `;
 
         // Step 3: Handle similar agents

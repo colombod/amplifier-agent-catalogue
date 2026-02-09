@@ -152,6 +152,17 @@ export class UploadController {
     }
 
     handleAnalysisComplete(data) {
+        console.log('handleAnalysisComplete called with data:', {
+            hasData: !!data,
+            hasMetadata: !!data?.metadata,
+            metadataKeys: data?.metadata ? Object.keys(data.metadata) : []
+        });
+        
+        if (!data || !data.metadata) {
+            console.error('handleAnalysisComplete: Missing data or metadata', data);
+            return;
+        }
+        
         this.renderer.displayAnalysis(data, this.steps, this.state);
 
         if (data.similar_agents && data.similar_agents.length > 0) {
