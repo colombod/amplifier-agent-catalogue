@@ -1423,12 +1423,9 @@ analyzeBtn.addEventListener('click', async function() {
     const feed = new ActivityFeed(activityFeedId);
 
     try {
-        // Use streaming endpoint for real-time visibility
-        const eventSource = new EventSource('/api/stream/analyze');
+        // Use fetch streaming (NOT EventSource - that only does GET)
         let finalData = null;
         
-        // Send content via POST body (EventSource doesn't support POST, so we'll use a workaround)
-        // Actually, we need to POST first to initiate the stream
         const response = await fetch('/api/stream/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1446,10 +1443,11 @@ analyzeBtn.addEventListener('click', async function() {
             return;
         }
 
-        // Process SSE stream
+        // Process SSE stream using fetch() body reader
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let currentEvent = '';
 
         while (true) {
             const { done, value } = await reader.read();
@@ -1463,60 +1461,56 @@ analyzeBtn.addEventListener('click', async function() {
                 if (!line.trim() || line.startsWith(':')) continue;
                 
                 if (line.startsWith('event: ')) {
-                    const eventType = line.substring(7).trim();
+                    currentEvent = line.substring(7).trim();
                     continue;
                 }
                 
                 if (line.startsWith('data: ')) {
-                    const data = line.substring(6);
-                    if (data === '[DONE]') {
+                    const dataStr = line.substring(6);
+                    if (dataStr === '[DONE]') {
                         if (finalData) {
                             analysisData = finalData;
                             displayAnalysis(analysisData);
                             document.getElementById('analyze-progress')?.remove();
                         }
-                        break;
+                        return; // Exit function on completion
                     }
                     
                     try {
-                        const parsed = JSON.parse(data);
+                        const data = JSON.parse(dataStr);
                         
-                        // Handle different event types based on structure
-                        if (parsed.phase) {
-                            // Phase update
-                            document.getElementById('analyze-phase-text').textContent = parsed.message;
-                            feed._add('⚡', parsed.message, 'phase');
-                        } else if (parsed.tool_name) {
-                            // Tool event
-                            if (parsed.success !== undefined) {
-                                // tool:post
-                                const preview = parsed.output_preview || 'completed';
-                                feed._add(parsed.success ? '←' : '✗',
-                                         `<span class="tool-name">${parsed.tool_name}</span> ${preview}`,
-                                         parsed.success ? 'tool' : 'error');
-                            } else {
-                                // tool:pre
-                                feed._add('→', `<span class="tool-name">${parsed.tool_name}</span>`, 'tool');
-                            }
-                        } else if (parsed.block_type === 'thinking' && parsed.content) {
-                            // Thinking block
-                            const preview = parsed.content.substring(0, 100);
+                        // Route by event type (matches backend emissions)
+                        if (currentEvent === 'phase') {
+                            document.getElementById('analyze-phase-text').textContent = data.message;
+                            feed._add('⚡', data.message, 'phase');
+                        } 
+                        else if (currentEvent === 'tool:pre') {
+                            feed._add('→', `<span class="tool-name">${data.tool_name}</span>`, 'tool');
+                        } 
+                        else if (currentEvent === 'tool:post') {
+                            const preview = data.output_preview || 'completed';
+                            feed._add(data.success ? '←' : '✗',
+                                     `<span class="tool-name">${data.tool_name}</span> ${preview}`,
+                                     data.success ? 'tool' : 'error');
+                        } 
+                        else if (currentEvent === 'content_block:end' && data.block_type === 'thinking' && data.content) {
+                            const preview = data.content.substring(0, 100);
                             feed._add('▸', `Agent reasoning: ${preview}...`, 'assistant');
-                        } else if (parsed.metadata) {
-                            // Final result
-                            finalData = parsed;
-                        } else if (parsed.message) {
-                            // Error
+                        } 
+                        else if (currentEvent === 'result') {
+                            finalData = data;
+                        } 
+                        else if (currentEvent === 'error') {
                             document.getElementById('step-1-body').insertAdjacentHTML('beforeend',
                                 `<div class="decision-box danger" id="analyze-error">
                                     <div class="decision-title">Analysis failed</div>
-                                    <div>${parsed.message}</div>
+                                    <div>${data.message}</div>
                                 </div>`);
                             document.getElementById('analyze-progress')?.remove();
-                            break;
+                            return;
                         }
                     } catch (e) {
-                        // Ignore parse errors
+                        console.error('Failed to parse SSE data:', e, dataStr);
                     }
                 }
             }
@@ -2300,96 +2294,122 @@ async function deepCompare(agentId, agentName) {
     const feed = new ActivityFeed(activityFeedId);
     
     try {
-        const eventSource = new EventSource('/api/stream/compare/' + agentId);
-        let finalData = null;
-        
-        eventSource.addEventListener('phase', (e) => {
-            const phase = JSON.parse(e.data);
-            document.getElementById('compare-phase-text').textContent = phase.message;
+        // Use fetch streaming (NOT EventSource - we need to POST content)
+        const response = await fetch(`/api/stream/compare/${agentId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: originalContent })
         });
         
-        eventSource.addEventListener('tool:pre', (e) => {
-            const data = JSON.parse(e.data);
-            feed._add('→', `<span class="tool-name">${data.tool_name}</span>`, 'tool');
-        });
-        
-        eventSource.addEventListener('tool:post', (e) => {
-            const data = JSON.parse(e.data);
-            const preview = data.output_preview || 'completed';
-            feed._add(data.success ? '←' : '✗', 
-                     `<span class="tool-name">${data.tool_name}</span> ${preview}`,
-                     data.success ? 'tool' : 'error');
-        });
-        
-        eventSource.addEventListener('content_block:end', (e) => {
-            const data = JSON.parse(e.data);
-            if (data.block_type === 'thinking' && data.content) {
-                const preview = data.content.substring(0, 100);
-                feed._add('▸', `Agent reasoning: ${preview}...`, 'assistant');
-            }
-        });
-        
-        eventSource.addEventListener('result', (e) => {
-            finalData = JSON.parse(e.data);
-        });
-        
-        eventSource.addEventListener('error', (e) => {
-            const data = JSON.parse(e.data);
+        if (!response.ok) {
+            const error = await response.json();
             document.getElementById('diff-container').innerHTML = `
-                <div class="alert alert-error">Error: ${data.message}</div>
+                <div class="alert alert-error">Error: ${error.detail || 'Comparison failed'}</div>
             `;
-            eventSource.close();
-        });
+            return;
+        }
         
-        eventSource.onmessage = (e) => {
-            if (e.data === '[DONE]') {
-                eventSource.close();
+        let finalData = null;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            
+            for (const line of lines) {
+                if (!line.trim() || line.startsWith(':')) continue;
                 
-                if (finalData) {
-                    const data = finalData;
-        
-        // Store the comparison result
-        comparedAgents[agentId] = {
-            data: data,
-            agentName: agentName,
-            timestamp: new Date()
-        };
-        lastComparedAgentId = agentId;
-                    
-                    // Render the diff
-                    renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
-                    
-                    // Update the similar agent card to show it's been compared
-                    const card = document.getElementById(`similar-${agentId}`);
-                    if (card) {
-                        card.classList.add('compared');
-                        // Re-render to update buttons
-                        const similar = analysisData.similar_agents.find(s => s.agent.id === agentId);
-                        if (similar) {
-                            card.outerHTML = renderSimilarAgent(similar);
+                if (line.startsWith('event: ')) {
+                    currentEvent = line.substring(7).trim();
+                    continue;
+                }
+                
+                if (line.startsWith('data: ')) {
+                    const dataStr = line.substring(6);
+                    if (dataStr === '[DONE]') {
+                        if (finalData) {
+                            const data = finalData;
+                            
+                            // Store the comparison result
+                            comparedAgents[agentId] = {
+                                data: data,
+                                agentName: agentName,
+                                timestamp: new Date()
+                            };
+                            lastComparedAgentId = agentId;
+                            
+                            // Render the diff
+                            renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
+                            
+                            // Update the similar agent card to show it's been compared
+                            const card = document.getElementById(`similar-${agentId}`);
+                            if (card) {
+                                card.classList.add('compared');
+                                // Re-render to update buttons
+                                const similar = analysisData.similar_agents.find(s => s.agent.id === agentId);
+                                if (similar) {
+                                    card.outerHTML = renderSimilarAgent(similar);
+                                }
+                            }
+                            
+                            // Show Step 3 action buttons (after first comparison)
+                            document.getElementById('compare-prompt').classList.add('hidden');
+                            document.getElementById('step-3-actions').classList.remove('hidden');
+                            
+                            // Update step state
+                            setStepState(3, 'active');
+                            setStepSummary(3, `Compared (${Math.round(highestSimilarity * 100)}% overlap)`);
                         }
+                        return; // Exit after completion
                     }
                     
-                    // Show Step 3 action buttons (after first comparison)
-                    document.getElementById('compare-prompt').classList.add('hidden');
-                    document.getElementById('step-3-actions').classList.remove('hidden');
-                    
-                    // Update step state
-                    setStepState(3, 'active');
-                    setStepSummary(3, `Compared (${Math.round(highestSimilarity * 100)}% overlap)`);
-                } else {
-                    document.getElementById('diff-container').innerHTML = `
-                        <div class="alert alert-error">No comparison result received</div>
-                    `;
+                    try {
+                        const data = JSON.parse(dataStr);
+                        
+                        // Route by event type (matches backend emissions)
+                        if (currentEvent === 'phase') {
+                            document.getElementById('compare-phase-text').textContent = data.message;
+                        }
+                        else if (currentEvent === 'tool:pre') {
+                            feed._add('→', `<span class="tool-name">${data.tool_name}</span>`, 'tool');
+                        }
+                        else if (currentEvent === 'tool:post') {
+                            const preview = data.output_preview || 'completed';
+                            feed._add(data.success ? '←' : '✗',
+                                     `<span class="tool-name">${data.tool_name}</span> ${preview}`,
+                                     data.success ? 'tool' : 'error');
+                        }
+                        else if (currentEvent === 'content_block:end' && data.block_type === 'thinking' && data.content) {
+                            const preview = data.content.substring(0, 100);
+                            feed._add('▸', `Agent reasoning: ${preview}...`, 'assistant');
+                        }
+                        else if (currentEvent === 'result') {
+                            finalData = data;
+                        }
+                        else if (currentEvent === 'error') {
+                            document.getElementById('diff-container').innerHTML = `
+                                <div class="alert alert-error">Error: ${data.message}</div>
+                            `;
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse SSE data:', e, dataStr);
+                    }
                 }
             }
-        };
+        }
         
     } catch (error) {
         document.getElementById('diff-container').innerHTML = `
             <div class="alert alert-error">Error: ${error.message}</div>
         `;
-        if (eventSource) eventSource.close();
     }
 }
 
