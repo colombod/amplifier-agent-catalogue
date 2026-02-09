@@ -205,12 +205,29 @@ class SessionManager:
         else:
             raise ValueError(f"Unknown bundle type: {bundle_type}")
 
-        # Use PreparedBundle.create_session() helper - it handles resolver mounting
-        # This is the correct pattern: prepare() → create_session()
-        session = await prepared_bundle.create_session(
+        # Get mount plan from prepared bundle
+        mount_plan = prepared_bundle.to_mount_plan()
+        logger.info(
+            "Mount plan has %d providers, %d tools",
+            len(mount_plan.get("providers", [])),
+            len(mount_plan.get("tools", [])),
+        )
+
+        # Create session
+        session = AmplifierSession(
+            config=mount_plan,
             session_id=session_id,
             parent_id=parent_id,
         )
+
+        # CRITICAL: Mount source resolver BEFORE initialize()
+        # This allows loader to find modules in bundle cache
+        if hasattr(prepared_bundle, 'resolver'):
+            await session.coordinator.mount("module-source-resolver", prepared_bundle.resolver)
+            logger.debug("Mounted bundle source resolver to session")
+
+        # Now initialize can find modules
+        await session.initialize()
 
         logger.info(
             "Created session %s from %s bundle (parent=%s)",
