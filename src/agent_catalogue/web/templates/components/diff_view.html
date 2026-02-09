@@ -235,7 +235,9 @@
 }
 </style>
 
-<script>
+<script type="module">
+import { escapeHtml } from '/static/js/utils.js';
+
 /**
  * Render a behavioral diff comparison
  * @param {Object} comparison - Comparison object from API
@@ -244,7 +246,7 @@
  * @param {string} newName - Name of new agent
  * @param {string} narrative - Human-readable narrative
  */
-function renderBehavioralDiff(comparison, containerId, existingName, newName, narrative) {
+window.renderBehavioralDiff = function(comparison, containerId, existingName, newName, narrative) {
     const container = document.getElementById(containerId);
     if (!container || !comparison) {
         if (container) {
@@ -405,12 +407,5 @@ function getRecIcon(action) {
         'replace': '↻'
     };
     return icons[action] || '•';
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
 }
 </script>

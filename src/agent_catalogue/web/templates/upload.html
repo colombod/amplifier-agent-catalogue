@@ -4,6 +4,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/upload.css">
+<link rel="stylesheet" href="/static/css/components/activity-feed.css">
 {% endblock %}
 
 {% block content %}
@@ -322,7 +323,6 @@
 </div>
 
 {% include "components/diff_view.html" %}
-{% include "components/activity_feed.html" %}
 
 <script type="module">
 import { escapeHtml } from '/static/js/utils.js';
@@ -1540,7 +1540,7 @@ function handleStrategyComplete(refinedContent) {
 }
 
 // Early differentiation gate handlers
-function showEarlyDifferentiationGate(similarAgents, wizardState.highestSimilarity) {
+function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
     const gateEl = document.getElementById('early-diff-gate');
     const summaryEl = document.getElementById('overlap-summary');
     const percentageEl = document.getElementById('overlap-percentage');
