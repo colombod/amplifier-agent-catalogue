@@ -35,6 +35,7 @@ export class WizardSteps {
      * @param {string} state - State: 'disabled', 'active', 'completed', 'needs-review'
      */
     setStepState(stepNum, state) {
+        console.log('[Step] Setting step', stepNum, 'to state:', state);
         const card = document.getElementById(`step-${stepNum}-card`);
         card.classList.remove('disabled', 'active', 'completed', 'collapsed', 'needs-review');
         card.classList.add(state);
@@ -75,6 +76,11 @@ export class WizardSteps {
      * @param {Object} wizardState - WizardState instance
      */
     enableStep4(wizardState) {
+        console.log('[Steps] enableStep4 called', {
+            isDuplicate: wizardState.analysisData?.is_duplicate,
+            hasUploadedFile: !!wizardState.uploadedFile
+        });
+        
         // If duplicate, skip quality and go straight to store (blocked)
         if (wizardState.analysisData.is_duplicate) {
             this.enableStep5();
@@ -84,6 +90,10 @@ export class WizardSteps {
         this.setStepState(4, 'active');
         document.getElementById('step-4-empty').classList.add('hidden');
         document.getElementById('step-4-loading').classList.remove('hidden');
+        
+        // Auto-trigger evaluation
+        console.log('[Steps] Triggering automatic quality evaluation');
+        window.dispatchEvent(new CustomEvent('startEvaluation'));
     }
 
     /**

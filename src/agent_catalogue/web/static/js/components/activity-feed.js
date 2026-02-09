@@ -34,6 +34,7 @@ export class ActivityFeed {
      * Returns a promise that resolves with the "result" event payload.
      */
     start(url, payload) {
+        console.log('[ActivityFeed] Starting SSE stream', { url, payloadSize: JSON.stringify(payload).length });
         this.clear();
         this._resolved = false;
 
@@ -45,9 +46,12 @@ export class ActivityFeed {
                     body: JSON.stringify(payload),
                 });
 
+                console.log('[ActivityFeed] Fetch response received', { status: resp.status, ok: resp.ok });
+
                 if (!resp.ok) {
                     let detail = `HTTP ${resp.status}`;
                     try { detail = (await resp.json()).detail || detail; } catch { }
+                    console.error('[ActivityFeed] Fetch failed', { url, status: resp.status, detail });
                     return reject(new Error(detail));
                 }
 
@@ -80,8 +84,12 @@ export class ActivityFeed {
                         }
                         if (!evData) continue;
                         try {
-                            this._dispatch(evType, JSON.parse(evData), resolve, reject);
-                        } catch { /* skip unparseable */ }
+                            const parsedData = JSON.parse(evData);
+                            console.log('[SSE] ✅', evType, parsedData);
+                            this._dispatch(evType, parsedData, resolve, reject);
+                        } catch (err) { 
+                            console.error('[SSE] ❌ Parse error -', 'type:', evType, 'raw:', evData, 'error:', err);
+                        }
                     }
                 }
 

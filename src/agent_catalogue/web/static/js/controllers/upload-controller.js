@@ -71,6 +71,11 @@ export class UploadController {
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 this.state.uploadedFile = fileInput.files[0];
+                console.log('[Upload] File selected:', {
+                    name: this.state.uploadedFile.name,
+                    size: this.state.uploadedFile.size,
+                    type: this.state.uploadedFile.type
+                });
                 fileWrapper.classList.add('has-file');
                 document.getElementById('file-name').textContent = this.state.uploadedFile.name;
                 document.getElementById('file-name').classList.remove('hidden');
@@ -108,7 +113,12 @@ export class UploadController {
             // CRITICAL: Read file content first and store for later use
             try {
                 this.state.originalContent = await this.state.uploadedFile.text();
+                console.log('[Analysis] File content loaded:', {
+                    length: this.state.originalContent.length,
+                    lines: this.state.originalContent.split('\n').length
+                });
             } catch (error) {
+                console.error('[Analysis] Failed to read file content:', error);
                 alert('Failed to read file content: ' + error.message);
                 return;
             }
@@ -129,8 +139,16 @@ export class UploadController {
             `);
 
             try {
+                console.log('[Analysis] Starting API call with content length:', this.state.originalContent.length);
                 // Use API client for streaming analysis
                 this.state.analysisData = await this.api.analyze(this.state.originalContent, activityFeedId);
+
+                console.log('[Analysis] Complete, received data:', {
+                    metadata: this.state.analysisData?.metadata?.name,
+                    isDuplicate: this.state.analysisData?.is_duplicate,
+                    similarCount: this.state.analysisData?.similar_agents?.length,
+                    hasOverlap: this.state.analysisData?.has_significant_overlap
+                });
 
                 if (this.state.analysisData) {
                     this.handleAnalysisComplete(this.state.analysisData);
@@ -152,14 +170,16 @@ export class UploadController {
     }
 
     handleAnalysisComplete(data) {
-        console.log('handleAnalysisComplete called with data:', {
-            hasData: !!data,
-            hasMetadata: !!data?.metadata,
-            metadataKeys: data?.metadata ? Object.keys(data.metadata) : []
+        console.log('[Flow] handleAnalysisComplete called', {
+            agentName: data?.metadata?.name,
+            similarCount: data?.similar_agents?.length,
+            highestSimilarity: this.state.highestSimilarity,
+            hasSignificantOverlap: data?.has_significant_overlap,
+            isDuplicate: data?.is_duplicate
         });
         
         if (!data || !data.metadata) {
-            console.error('handleAnalysisComplete: Missing data or metadata', data);
+            console.error('[Flow] handleAnalysisComplete: Missing data or metadata', data);
             return;
         }
         
@@ -173,10 +193,24 @@ export class UploadController {
             const hasLikelyDuplicate = data.similar_agents.some(
                 s => s.comparison && s.comparison.recommendation === 'likely_duplicate'
             );
-            const needsReview = hasTraitOverlap || hasLikelyDuplicate || this.state.highestSimilarity >= 0.85;
-            const shouldOfferEarlyDiff = this.state.highestSimilarity >= 0.70;
+            
+            // Fix: needsReview should only trigger for HIGH-RISK duplicates (85%+)
+            // hasTraitOverlap is informational, not a blocking condition
+            const needsReview = hasLikelyDuplicate || this.state.highestSimilarity >= 0.85;
+            const shouldOfferEarlyDiff = this.state.highestSimilarity >= 0.70 && this.state.highestSimilarity < 0.85;
+
+            console.log('[Gate] Decision variables:', {
+                highestSimilarity: this.state.highestSimilarity,
+                hasTraitOverlap,
+                hasLikelyDuplicate,
+                needsReview,
+                shouldOfferEarlyDiff,
+                mostSimilarAgent: mostSimilar?.agent?.name,
+                logic: needsReview ? 'NEEDS_REVIEW (85%+)' : shouldOfferEarlyDiff ? 'EARLY_DIFF_GATE (70-84%)' : 'PROCEED (<70%)'
+            });
 
             if (needsReview) {
+                console.log('[Gate] Path: NEEDS_REVIEW - Showing duplication banner (85%+ or likely_duplicate)');
                 // Genuine duplication risk: require review
                 this.renderer.showDuplicationBanner(this.state.highestSimilarity, mostSimilar.agent.name);
                 this.steps.setStepState(3, 'needs-review');
@@ -185,6 +219,7 @@ export class UploadController {
                 this.steps.setStepState(4, 'disabled');
                 this.steps.setStepState(5, 'disabled');
             } else if (shouldOfferEarlyDiff) {
+                console.log('[Gate] Path: EARLY_DIFF - Showing differentiation gate');
                 // Moderate overlap: offer early differentiation choice
                 this.renderer.showEarlyDifferentiationGate(data.similar_agents, this.state.highestSimilarity, this.state);
                 this.steps.setStepState(3, 'active');
@@ -192,11 +227,13 @@ export class UploadController {
                 this.steps.setStepState(4, 'disabled');
                 this.steps.setStepState(5, 'disabled');
             } else {
+                console.log('[Gate] Path: PROCEED - Similar but not duplicates, proceeding to Step 4');
                 // Similar but not duplicates: proceed
                 this.steps.setStepState(3, 'completed');
                 this.steps.enableStep4(this.state);
             }
         } else {
+            console.log('[Gate] Path: NO_SIMILAR - No similar agents found, proceeding to Step 4');
             // No similar agents: proceed
             this.steps.setStepState(3, 'completed');
             this.steps.enableStep4(this.state);

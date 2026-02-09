@@ -50,6 +50,13 @@ export class UploadRenderer {
      * @param {Object} state - WizardState instance
      */
     displayAnalysis(data, steps, state) {
+        console.log('[Render] displayAnalysis called', {
+            agentName: data.metadata?.name,
+            domains: data.metadata?.domains,
+            capabilities: data.metadata?.capabilities?.length,
+            similarCount: data.similar_agents?.length,
+            isDuplicate: data.is_duplicate
+        });
         const meta = data.metadata;
 
         // Defensive: ensure arrays exist to prevent .map() crashes
@@ -448,6 +455,15 @@ export class UploadRenderer {
      * @param {Object} state - WizardState instance
      */
     showEarlyDifferentiationGate(similarAgents, highestSimilarity, state) {
+        console.log('[Render] showEarlyDifferentiationGate', {
+            agentCount: similarAgents.length,
+            similarity: (highestSimilarity * 100).toFixed(1) + '%',
+            topAgents: similarAgents.slice(0, 3).map(s => ({
+                name: s.agent.name,
+                similarity: (s.similarity_score * 100).toFixed(1) + '%'
+            }))
+        });
+
         const gateEl = document.getElementById('early-diff-gate');
         const summaryEl = document.getElementById('overlap-summary');
         const percentageEl = document.getElementById('overlap-percentage');

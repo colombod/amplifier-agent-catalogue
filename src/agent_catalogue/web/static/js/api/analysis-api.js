@@ -39,8 +39,19 @@ export class AnalysisAPI {
      * @throws {Error} If analysis fails
      */
     async analyze(content, activityFeedId) {
+        console.log('[API] analyze() called', {
+            url: '/api/stream/analyze',
+            contentLength: content.length,
+            activityFeedId
+        });
         const feed = new ActivityFeed(activityFeedId);
-        return await feed.start('/api/stream/analyze', { content });
+        const result = await feed.start('/api/stream/analyze', { content });
+        console.log('[API] analyze() completed', {
+            hasResult: !!result,
+            metadata: result?.metadata?.name,
+            similarCount: result?.similar_agents?.length
+        });
+        return result;
     }
 
     /**
@@ -84,6 +95,12 @@ export class AnalysisAPI {
      * @throws {Error} If improvement fails
      */
     async improve(content, evaluation, issues, activityFeedId) {
+        console.log('[API] improve() called', {
+            url: '/api/stream/improve',
+            contentLength: typeof content === 'string' ? content.length : 'FormData',
+            issueCount: issues?.length || 0,
+            hasEvaluation: !!evaluation
+        });
         const feed = new ActivityFeed(activityFeedId);
 
         // Support both string content and FormData for backwards compatibility
@@ -115,8 +132,13 @@ export class AnalysisAPI {
      * @throws {Error} If comparison fails
      */
     async deepCompare(agentId, content, activityFeedId) {
+        console.log('[API] deepCompare() called', {
+            url: `/api/stream/compare/${agentId}`,
+            agentId,
+            contentLength: content.length
+        });
         const feed = new ActivityFeed(activityFeedId);
-        return await feed.start(`/api/stream/compare/${agentId}`, { content });
+        const result = await feed.start(`/api/stream/compare/${agentId}`, { content });
     }
 
     // ==================== Non-Streaming Methods ====================
