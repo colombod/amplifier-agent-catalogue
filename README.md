@@ -170,10 +170,36 @@ uv sync
 cp .env.example .env
 # Edit .env with your credentials
 
-# 4. Start the server
-uv run agent-catalogue serve
+# 4. Initialize Amplifier providers (automatic on first run)
+# Providers are installed automatically when the server starts
+# No manual initialization needed!
 
-# 5. Open http://localhost:8000
+# 5. Start the server
+uv run agent-catalogue serve --host 127.0.0.1 --port 8000
+
+# 6. Open http://localhost:8000
+```
+
+**What happens on first startup:**
+1. Application loads `.env` credentials
+2. SessionManager automatically installs Amplifier providers:
+   - `provider-anthropic` (from GitHub + SDK dependencies)
+   - `provider-openai` (available if configured)
+   - `provider-azure-openai` (available if configured)
+3. Creates DuckDB database at `data/catalogue.duckdb`
+4. Loads agent definitions from `agents/` directory
+5. Server ready at http://127.0.0.1:8000
+
+**Startup logs to expect:**
+```
+Initializing DuckDB at data/catalogue.duckdb
+Initializing embedder (endpoint=https://..., auth=rbac)
+Installing provider-anthropic...
+✓ Installed: provider-anthropic
+Starting Amplifier SessionManager...
+Loaded @recipes bundle: recipes
+SessionManager started with providers: ['provider-anthropic']
+Agent Catalogue ready on 127.0.0.1:8000
 ```
 
 ### Configuration
