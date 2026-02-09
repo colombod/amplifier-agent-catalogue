@@ -175,6 +175,16 @@ class SessionManager:
             providers=providers,
             session={
                 "default_provider": active_provider,
+                # EXPLICIT orchestrator and context sources for server deployment
+                # Foundation bundles assume entry points, but server needs explicit URLs
+                "orchestrator": {
+                    "module": "loop-streaming",
+                    "source": "git+https://github.com/microsoft/amplifier-module-orchestrator-loop-streaming@main"
+                },
+                "context": {
+                    "module": "context-simple",
+                    "source": "git+https://github.com/microsoft/amplifier-module-context-simple@main"
+                }
             },
         )
 
