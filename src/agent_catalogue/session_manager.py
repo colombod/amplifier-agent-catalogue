@@ -106,7 +106,7 @@ class SessionManager:
         if "recipes" not in self._prepared_bundles:
             logger.info("Loading @recipes bundle...")
 
-            # 1. Load @recipes bundle (includes foundation + tool-recipes)
+            # 1. Load @recipes bundle (includes foundation automatically via includes:)
             recipes_bundle = await load_bundle(
                 "git+https://github.com/microsoft/amplifier-bundle-recipes@main"
             )
@@ -119,11 +119,12 @@ class SessionManager:
             composed = recipes_bundle.compose(override)
             logger.info("Composed bundle with custom providers")
 
-            # 4. Prepare (download/install modules) - cache this result
-            await composed.prepare(install_deps=True)
+            # 4. Prepare (download/install modules) - returns PreparedBundle
+            prepared = await composed.prepare(install_deps=True)
             logger.info("Prepared bundle (modules installed)")
+            logger.info(f"Prepared bundle type: {type(prepared).__name__}")
 
-            self._prepared_bundles["recipes"] = composed
+            self._prepared_bundles["recipes"] = prepared
 
         return self._prepared_bundles["recipes"]
 
@@ -213,37 +214,12 @@ class SessionManager:
             len(mount_plan.get("tools", [])),
         )
 
-        # Debug: Log what we have
-        logger.info(f"Prepared bundle type: {type(prepared_bundle).__name__}")
-        logger.info(f"Prepared bundle has resolver attr: {hasattr(prepared_bundle, 'resolver')}")
-        logger.info(f"Prepared bundle has _resolver attr: {hasattr(prepared_bundle, '_resolver')}")
-        logger.info(f"Prepared bundle attrs: {[a for a in dir(prepared_bundle) if 'resolv' in a.lower() or 'source' in a.lower()]}")
-
-        # Create session
-        session = AmplifierSession(
-            config=mount_plan,
+        # Use PreparedBundle.create_session() like amplifier-app-cli does
+        # This handles resolver mounting, initialization, and everything
+        session = await prepared_bundle.create_session(
             session_id=session_id,
             parent_id=parent_id,
         )
-
-        # CRITICAL: Mount source resolver BEFORE initialize()
-        # Try different attribute names
-        resolver = None
-        if hasattr(prepared_bundle, "resolver"):
-            resolver = prepared_bundle.resolver
-        elif hasattr(prepared_bundle, "_resolver"):
-            resolver = prepared_bundle._resolver
-        elif hasattr(prepared_bundle, "source_resolver"):
-            resolver = prepared_bundle.source_resolver
-        
-        if resolver:
-            await session.coordinator.mount("module-source-resolver", resolver)
-            logger.info("✅ Mounted bundle source resolver to session")
-        else:
-            logger.error("❌ Could not find resolver on prepared_bundle - session will fail to load modules")
-
-        # Now initialize can find modules
-        await session.initialize()
 
         logger.info(
             "Created session %s from %s bundle (parent=%s)",
