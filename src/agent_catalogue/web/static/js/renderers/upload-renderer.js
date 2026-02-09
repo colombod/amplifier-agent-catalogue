@@ -594,6 +594,32 @@ export class UploadRenderer {
         document.getElementById('improve-loading').classList.add('hidden');
         document.getElementById('improve-results').classList.remove('hidden');
 
+        // Show improved quality grade badge
+        const improvedHeader = document.getElementById('improved-quality-header');
+        if (improvedHeader && data.new_grade && data.new_score) {
+            const grade = data.new_grade;
+            const score = data.new_score;
+            const gradeLabels = {
+                'A': 'Excellent',
+                'B': 'Good', 
+                'C': 'Adequate',
+                'D': 'Needs Work',
+                'F': 'Poor'
+            };
+            const label = gradeLabels[grade] || grade;
+            
+            improvedHeader.innerHTML = `
+                <div class="grade-badge grade-${grade}">
+                    <span class="grade-letter">${grade}</span>
+                    <span class="grade-score">${score.toFixed(1)}/10</span>
+                </div>
+                <div class="quality-summary-text">
+                    <h3>${label} (Improved Version)</h3>
+                    <p>${data.improvements_summary || 'Quality improvements applied'}</p>
+                </div>
+            `;
+        }
+
         // Show catalogue neighbors used as context
         if (data.catalogue_neighbors && data.catalogue_neighbors.length > 0) {
             document.getElementById('catalogue-context-section').classList.remove('hidden');
