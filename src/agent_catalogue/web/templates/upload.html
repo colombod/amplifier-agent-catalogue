@@ -5,6 +5,7 @@
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/upload.css">
 <link rel="stylesheet" href="/static/css/components/activity-feed.css">
+<link rel="stylesheet" href="/static/css/components/diff-view.css">
 {% endblock %}
 
 {% block content %}
@@ -322,19 +323,21 @@
     </div>
 </div>
 
-{% include "components/diff_view.html" %}
-
 <script type="module">
 import { escapeHtml } from '/static/js/utils.js';
 import { WizardState } from '/static/js/wizard/wizard-state.js';
 import { AnalysisAPI } from '/static/js/api/analysis-api.js';
 import { ActivityFeed } from '/static/js/components/activity-feed.js';
+import { DiffRenderer } from '/static/js/renderers/diff-renderer.js';
 
 // Initialize centralized state management
 const wizardState = new WizardState();
 
 // Initialize API client
 const api = new AnalysisAPI();
+
+// Initialize diff renderer
+const diffRenderer = new DiffRenderer();
 
 // Progress narrative for loading states
 function startProgressNarrative(elementId, phases, intervalMs) {
@@ -1210,7 +1213,7 @@ async function deepCompare(agentId, agentName) {
             wizardState.lastComparedAgentId = agentId;
             
             // Render the diff
-            renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
+            diffRenderer.renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
             
             // Update the similar agent card to show it's been compared
             const card = document.getElementById(`similar-${agentId}`);
@@ -1248,7 +1251,7 @@ function viewStoredComparison(agentId) {
     
     document.getElementById('diff-modal').classList.remove('hidden');
     document.getElementById('diff-modal-title').textContent = `Comparison with ${stored.agentName}`;
-    renderBehavioralDiff(
+    diffRenderer.renderBehavioralDiff(
         stored.data.comparison, 
         'diff-container', 
         stored.data.existing_agent, 
