@@ -17,21 +17,37 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
 
+from agent_catalogue.api.models.api_models import (
+    AnalyzeResponse,
+    CatalogueNeighbor,
+    EvaluateResponse,
+    ImproveResponse,
+    RecheckRequest,
+    RecheckResponse,
+    RefineRequest,
+    RefineResponse,
+    UploadResponse,
+)
+from agent_catalogue.api.utils.diff_utils import compute_diff_sections
+from agent_catalogue.api.utils.json_extractor import extract_json, strip_preamble
+from agent_catalogue.api.utils.response_formatters import (
+    estimate_improved_score,
+    grade_label,
+    to_token_metrics,
+)
 from agent_catalogue.models.agent import (
     Agent,
     AgentSummary,
     AgentVersion,
     SearchResult,
     SimilarAgent,
-    SimilarAgentWithComparison,
 )
 from agent_catalogue.models.evaluation import QualityEvaluation
 from agent_catalogue.models.extraction import ExtractedMetadata
 from agent_catalogue.services.comparator import ComparatorService
 from agent_catalogue.services.parser import ParserService
-from agent_catalogue.services.token_metrics import analyze_tokens, count_tokens
+from agent_catalogue.services.token_metrics import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -40,412 +56,6 @@ router = APIRouter()
 # Shared service instances (stateless, no config needed)
 _parser = ParserService()
 _comparator = ComparatorService()
-
-
-# ---------------------------------------------------------------------------
-# JSON helper – extract JSON from LLM prose
-# ---------------------------------------------------------------------------
-
-
-def _extract_json(text: str) -> dict[str, Any] | None:
-    """Extract a JSON object from LLM response text.
-
-    Tries, in order:
-    1. JSON inside ```json ... ``` fences
-    2. JSON inside ``` ... ``` fences
-    3. First balanced { ... } substring
-    4. Direct parse of the whole string
-
-    Returns None on failure.
-    """
-    if not text:
-        return None
-
-    stripped = text.strip()
-
-    # 1. ```json code fence
-    if "```json" in stripped:
-        start = stripped.find("```json") + 7
-        end = stripped.find("```", start)
-        if end > start:
-            candidate = stripped[start:end].strip()
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                pass
-
-    # 2. ``` code fence (any language)
-    if "```" in stripped:
-        start = stripped.find("```") + 3
-        # Skip optional language tag on same line
-        newline = stripped.find("\n", start)
-        if newline != -1:
-            start = newline + 1
-        end = stripped.find("```", start)
-        if end > start:
-            candidate = stripped[start:end].strip()
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                pass
-
-    # 3. Balanced brace matching
-    brace_start = stripped.find("{")
-    if brace_start != -1:
-        depth = 0
-        for i in range(brace_start, len(stripped)):
-            if stripped[i] == "{":
-                depth += 1
-            elif stripped[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = stripped[brace_start : i + 1]
-                    try:
-                        return json.loads(candidate)
-                    except json.JSONDecodeError:
-                        break
-
-    # 4. Whole string
-    try:
-        result = json.loads(stripped)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError as e:
-        logger.warning("Direct parse failed: %s", str(e))
-
-    # All methods failed - log what we received
-    logger.error(
-        "Failed to extract JSON from LLM response (%d chars). First 300 chars: %s",
-        len(text),
-        text[:300],
-    )
-    return None
-
-
-def _strip_preamble(text: str) -> str:
-    """Strip LLM thinking/commentary before the actual markdown content.
-
-    The model sometimes prepends reasoning or wraps output in code fences.
-    This finds the first markdown heading and returns everything from there.
-    """
-    stripped = text.strip()
-
-    # Strip wrapping code fences (```markdown ... ```)
-    if stripped.startswith("```"):
-        first_nl = stripped.index("\n") if "\n" in stripped else len(stripped)
-        stripped = stripped[first_nl + 1 :]
-        if stripped.rstrip().endswith("```"):
-            stripped = stripped.rstrip()[:-3].rstrip()
-
-    # Find the first markdown heading – that is where real content starts
-    lines = stripped.split("\n")
-    for i, line in enumerate(lines):
-        if line.startswith("# "):
-            return "\n".join(lines[i:]).strip()
-
-    return stripped.strip()
-
-
-# ---------------------------------------------------------------------------
-# Scoring / diff helpers (pure functions, no LLM)
-# ---------------------------------------------------------------------------
-
-
-def _grade_label(grade: str) -> str:
-    """Map letter grade to human-readable label."""
-    labels = {
-        "A": "Excellent",
-        "B": "Good",
-        "C": "Adequate",
-        "D": "Needs Work",
-        "F": "Poor",
-    }
-    return labels.get(grade, "Unknown")
-
-
-def _estimate_improved_score(evaluation: dict[str, Any]) -> tuple[float, str]:
-    """Estimate what score could be achieved after improvement."""
-    current = evaluation.get("overall_score", 5.0)
-    issues = evaluation.get("issues", [])
-    critical = sum(1 for i in issues if i.get("severity") == "critical")
-    major = sum(1 for i in issues if i.get("severity") == "major")
-
-    boost = critical * 1.0 + major * 0.5
-    estimated = min(current + boost, 9.5)
-
-    if estimated >= 9.0:
-        grade = "A"
-    elif estimated >= 7.0:
-        grade = "B"
-    elif estimated >= 5.0:
-        grade = "C"
-    elif estimated >= 3.0:
-        grade = "D"
-    else:
-        grade = "F"
-
-    return estimated, grade
-
-
-def _compute_diff_sections(original: str, improved: str) -> list[dict[str, Any]]:
-    """Compute section-level diff between original and improved markdown."""
-    heading_re = re.compile(r"^(#{1,6}\s+.+)$", re.MULTILINE)
-
-    def split_sections(text: str) -> list[tuple[str, str]]:
-        parts = heading_re.split(text)
-        sections: list[tuple[str, str]] = []
-        if parts and parts[0].strip():
-            sections.append(("(Preamble)", parts[0].strip()))
-        for i in range(1, len(parts), 2):
-            heading = parts[i].strip()
-            body = parts[i + 1].strip() if i + 1 < len(parts) else ""
-            sections.append((heading, body))
-        return sections
-
-    orig_sections = split_sections(original)
-    impr_sections = split_sections(improved)
-
-    orig_map = {h: b for h, b in orig_sections}
-    seen_headings: set[str] = set()
-
-    changes: list[dict[str, Any]] = []
-    for heading, new_body in impr_sections:
-        seen_headings.add(heading)
-        old_body = orig_map.get(heading)
-
-        if old_body is None:
-            changes.append(
-                {
-                    "section": heading,
-                    "type": "added",
-                    "original_lines": [],
-                    "improved_lines": new_body.splitlines(),
-                }
-            )
-        elif old_body.strip() == new_body.strip():
-            changes.append(
-                {
-                    "section": heading,
-                    "type": "unchanged",
-                    "original_lines": old_body.splitlines(),
-                    "improved_lines": new_body.splitlines(),
-                }
-            )
-        else:
-            changes.append(
-                {
-                    "section": heading,
-                    "type": "modified",
-                    "original_lines": old_body.splitlines(),
-                    "improved_lines": new_body.splitlines(),
-                }
-            )
-
-    for heading, body in orig_sections:
-        if heading not in seen_headings:
-            changes.append(
-                {
-                    "section": heading,
-                    "type": "removed",
-                    "original_lines": body.splitlines(),
-                    "improved_lines": [],
-                }
-            )
-
-    return changes
-
-
-# ---------------------------------------------------------------------------
-# Token metrics helper
-# ---------------------------------------------------------------------------
-
-
-class TokenMetrics(BaseModel):
-    """Token usage metrics for an AGENTS.md file."""
-
-    total_tokens: int
-    total_lines: int
-    total_chars: int
-    tokens_per_line: float
-    budget_category: str  # lean / moderate / heavy / excessive
-    budget_label: str
-    recommendation: str
-    sections: list[dict[str, Any]] = Field(default_factory=list)
-
-
-def _to_token_metrics(text: str) -> TokenMetrics:
-    """Analyze a markdown string and return token metrics."""
-    ta = analyze_tokens(text)
-    return TokenMetrics(
-        total_tokens=ta.total_tokens,
-        total_lines=ta.total_lines,
-        total_chars=ta.total_chars,
-        tokens_per_line=ta.tokens_per_line,
-        budget_category=ta.budget_category,
-        budget_label=ta.budget_label,
-        recommendation=ta.recommendation,
-        sections=[
-            {
-                "heading": s.heading,
-                "tokens": s.tokens,
-                "pct_of_total": s.pct_of_total,
-            }
-            for s in ta.sections
-        ],
-    )
-
-
-# ===================================================================
-# Response Models
-# ===================================================================
-
-
-class UploadResponse(BaseModel):
-    """Response from upload endpoint."""
-
-    agent: AgentSummary
-    version: int
-    similar_agents: list[SimilarAgent]
-    is_new: bool
-
-
-class AnalyzeResponse(BaseModel):
-    """Response from analyze endpoint (pre-commit check)."""
-
-    metadata: ExtractedMetadata
-    similar_agents: list[SimilarAgentWithComparison]
-    content_hash: str
-    is_duplicate: bool
-    has_significant_overlap: bool = False
-
-
-class EvaluateResponse(BaseModel):
-    """Response from quality evaluation endpoint."""
-
-    overall_score: float
-    grade: str
-    grade_label: str
-    summary: str
-    dimensions: dict[str, Any]
-    issues: list[dict[str, Any]]
-    strengths: list[str]
-    can_improve: bool
-    estimated_improved_score: float | None = None
-    estimated_improved_grade: str | None = None
-    token_metrics: TokenMetrics | None = None
-
-
-class CatalogueNeighbor(BaseModel):
-    """An existing agent used as context during improvement."""
-
-    name: str
-    description: str
-    capabilities: list[str] = Field(default_factory=list)
-    domains: list[str] = Field(default_factory=list)
-    tools: list[str] = Field(default_factory=list)
-    similarity_score: float
-
-
-class ImproveResponse(BaseModel):
-    """Response from quality improvement endpoint."""
-
-    improved_content: str
-    original_content: str
-    changes: list[dict[str, Any]]
-    new_score: float | None = None
-    new_grade: str | None = None
-    improvements_summary: str
-    catalogue_neighbors: list[CatalogueNeighbor] = Field(default_factory=list)
-    original_token_metrics: TokenMetrics | None = None
-    improved_token_metrics: TokenMetrics | None = None
-
-
-class RefineRequest(BaseModel):
-    """Request to refine content to reduce overlap."""
-
-    content: str
-    overlapping_agents: list[dict[str, Any]]
-
-
-class RefineResponse(BaseModel):
-    """Response from refinement endpoint."""
-
-    refined_content: str
-    original_content: str
-    changes: list[dict[str, Any]]
-    token_metrics: TokenMetrics | None = None
-
-
-class RecheckRequest(BaseModel):
-    """Request for re-duplication check on improved content."""
-
-    content: str
-
-
-class RecheckResponse(BaseModel):
-    """Response from re-duplication check."""
-
-    similar_agents: list[SimilarAgentWithComparison]
-    highest_similarity: float
-    has_duplication_risk: bool
-
-
-# --- Recipe Execution Models ---
-
-
-class RecipeStartRequest(BaseModel):
-    """Request to start a recipe execution."""
-
-    recipe_path: str = Field(..., description="Path to recipe YAML file")
-    context: dict[str, Any] = Field(
-        default_factory=dict, description="Context variables for recipe"
-    )
-
-
-class RecipeStartResponse(BaseModel):
-    """Response from recipe start endpoint."""
-
-    session_id: str = Field(..., description="Recipe session identifier")
-    status: str = Field(..., description="Initial status (usually 'running')")
-
-
-class RecipeStatusResponse(BaseModel):
-    """Response from recipe status endpoint."""
-
-    session_id: str
-    status: str = Field(..., description="running | paused_for_approval | completed | failed")
-    recipe_name: str | None = None
-    current_stage: str | None = None
-    outputs: dict[str, Any] = Field(default_factory=dict)
-    approval_needed: bool = False
-    pending_approval: dict[str, Any] | None = None
-
-
-class RecipeSessionsResponse(BaseModel):
-    """Response from list recipe sessions endpoint."""
-
-    sessions: list[dict[str, Any]]
-    count: int
-
-
-class RecipeApprovalResponse(BaseModel):
-    """Response from recipe approval endpoint."""
-
-    status: str = Field(..., description="Status after approval (usually 'resumed')")
-    session_id: str
-
-
-class RecipeDenyRequest(BaseModel):
-    """Request to deny a recipe stage."""
-
-    reason: str | None = Field(None, description="Optional reason for denial")
-
-
-class RecipeDenyResponse(BaseModel):
-    """Response from recipe deny endpoint."""
-
-    status: str = Field(..., description="Status after denial (usually 'denied')")
-    session_id: str
 
 
 # ===================================================================
@@ -748,7 +358,7 @@ async def upload_agent(
         f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
     )
     logger.debug("Extractor response (first 500 chars): %s", extraction_response[:500])
-    metadata_dict = _extract_json(extraction_response) or {}
+    metadata_dict = extract_json(extraction_response) or {}
     logger.debug(
         "Extracted metadata dict keys: %s", list(metadata_dict.keys()) if metadata_dict else "EMPTY"
     )
@@ -887,7 +497,7 @@ async def analyze_agent(
         f"Extract structured metadata from this AGENTS.md content. "
         f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
     )
-    metadata = _build_metadata(_extract_json(extraction_response) or {}, document)
+    metadata = _build_metadata(extract_json(extraction_response) or {}, document)
     logger.info(
         "POST /api/analyze: extraction complete, found %d capabilities",
         len(metadata.capabilities),
@@ -899,7 +509,7 @@ async def analyze_agent(
         f"Classify this agent. Return JSON with: primary_domain, "
         f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}",
     )
-    classification = _extract_json(classification_response)
+    classification = extract_json(classification_response)
     if classification:
         # Merge classification into metadata where applicable
         if "tags" in classification:
@@ -1043,7 +653,7 @@ async def stream_analyze_agent(
                 f"Return ONLY valid JSON matching the ExtractedMetadata schema.\n\n{content_str}",
                 queue,
             )
-            metadata = _build_metadata(_extract_json(extraction_response) or {}, document)
+            metadata = _build_metadata(extract_json(extraction_response) or {}, document)
             logger.info(
                 "Stream analyze: extraction complete, found %d capabilities",
                 len(metadata.capabilities),
@@ -1065,7 +675,7 @@ async def stream_analyze_agent(
                 f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}",
                 queue,
             )
-            classification = _extract_json(classification_response)
+            classification = extract_json(classification_response)
 
             if classification:
                 # Merge classification into metadata
@@ -1230,7 +840,7 @@ async def evaluate_agent_quality(
         f"issues (list), strengths (list), summary.\n\n"
         f"<content>\n{content_str}\n</content>",
     )
-    raw = _extract_json(eval_response) or {}
+    raw = extract_json(eval_response) or {}
 
     # Parse into validated model with fallbacks
     try:
@@ -1257,7 +867,7 @@ async def evaluate_agent_quality(
     estimated_score = None
     estimated_grade = None
     if can_improve:
-        estimated_score, estimated_grade = _estimate_improved_score(raw)
+        estimated_score, estimated_grade = estimate_improved_score(raw)
 
     # Build dimensions dict for frontend
     dimensions: dict[str, Any] = {}
@@ -1269,13 +879,13 @@ async def evaluate_agent_quality(
         }
 
     # Token metrics
-    token_metrics = _to_token_metrics(content_str)
+    token_metrics = to_token_metrics(content_str)
 
     logger.info("POST /api/evaluate: score=%.1f grade=%s", score, grade)
     return EvaluateResponse(
         overall_score=score,
         grade=grade,
-        grade_label=_grade_label(grade),
+        grade_label=grade_label(grade),
         summary=evaluation.summary or raw.get("summary", ""),
         dimensions=dimensions,
         issues=issues,
@@ -1331,7 +941,7 @@ async def improve_agent_quality(
         f"severity/description/suggestion), strengths, summary.\n\n"
         f"<content>\n{content_str}\n</content>",
     )
-    evaluation = _extract_json(eval_response) or {}
+    evaluation = extract_json(eval_response) or {}
 
     # Build improvement prompt with catalogue context
     issues_summary = []
@@ -1407,12 +1017,12 @@ async def improve_agent_quality(
     )
 
     improved_raw = await session_mgr.run_one_shot("improver", improve_prompt)
-    improved = _strip_preamble(improved_raw)
+    improved = strip_preamble(improved_raw)
 
     # Compute section-level diff
-    changes = _compute_diff_sections(content_str, improved)
+    changes = compute_diff_sections(content_str, improved)
 
-    new_score, new_grade = _estimate_improved_score(evaluation)
+    new_score, new_grade = estimate_improved_score(evaluation)
     modified = sum(1 for c in changes if c["type"] in ("modified", "added"))
     summary = f"{modified} section(s) improved"
 
@@ -1425,8 +1035,8 @@ async def improve_agent_quality(
         new_grade=new_grade,
         improvements_summary=summary,
         catalogue_neighbors=catalogue_neighbors,
-        original_token_metrics=_to_token_metrics(content_str),
-        improved_token_metrics=_to_token_metrics(improved),
+        original_token_metrics=to_token_metrics(content_str),
+        improved_token_metrics=to_token_metrics(improved),
     )
 
 
@@ -1543,7 +1153,7 @@ async def refine_agent_content(
                 detail="Agent returned empty/invalid response. Check debug log",
             )
 
-        refined = _strip_preamble(refined_raw)
+        refined = strip_preamble(refined_raw)
 
     except HTTPException:
         raise
@@ -1551,8 +1161,8 @@ async def refine_agent_content(
         logger.exception("Refine failed")
         raise HTTPException(status_code=500, detail=f"Refinement error: {str(e)}") from None
 
-    changes = _compute_diff_sections(content_str, refined)
-    token_metrics = _to_token_metrics(refined)
+    changes = compute_diff_sections(content_str, refined)
+    token_metrics = to_token_metrics(refined)
 
     return RefineResponse(
         refined_content=refined,
@@ -1595,7 +1205,7 @@ async def analyze_improved_content(
         f"Return ONLY valid JSON.\n\n{content_str}",
     )
     metadata = _build_metadata(
-        _extract_json(extraction_response) or {},
+        extract_json(extraction_response) or {},
         _parser.parse(content_str),
     )
 
@@ -1662,7 +1272,7 @@ async def compare_with_agent(
     )
 
     compare_response = await session_mgr.run_one_shot("comparator", compare_prompt)
-    comparison = _extract_json(compare_response) or {}
+    comparison = extract_json(compare_response) or {}
 
     # LLM: generate narrative
     narrate_prompt = (
@@ -1763,7 +1373,7 @@ async def stream_compare_with_agent(
                 queue,
             )
 
-            comparison = _extract_json(compare_response) or {}
+            comparison = extract_json(compare_response) or {}
 
             # Phase 2: Generate narrative
             await _emit(
@@ -1884,7 +1494,7 @@ async def search_with_agent(
     )
 
     explain_response = await session_mgr.run_one_shot("relevance", explain_prompt)
-    explanations_raw = _extract_json(explain_response)
+    explanations_raw = extract_json(explain_response)
 
     # Handle both list and dict responses
     if isinstance(explanations_raw, dict):
@@ -1980,7 +1590,7 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                 queue,
             )
 
-            raw = _extract_json(eval_response) or {}
+            raw = extract_json(eval_response) or {}
 
             # Parse into validated model with fallbacks
             try:
@@ -2001,7 +1611,7 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
             estimated_score = None
             estimated_grade = None
             if can_improve:
-                estimated_score, estimated_grade = _estimate_improved_score(raw)
+                estimated_score, estimated_grade = estimate_improved_score(raw)
 
             # Build dimensions dict for frontend
             dimensions: dict[str, Any] = {}
@@ -2012,7 +1622,7 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                     "label": ((dim.get("evidence", [""])[0])[:80] if dim.get("evidence") else ""),
                 }
 
-            token_metrics = _to_token_metrics(content_str)
+            token_metrics = to_token_metrics(content_str)
 
             await _emit(
                 "result",
@@ -2020,7 +1630,7 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                     "result": EvaluateResponse(
                         overall_score=score,
                         grade=grade,
-                        grade_label=_grade_label(grade),
+                        grade_label=grade_label(grade),
                         summary=evaluation.summary or raw.get("summary", ""),
                         dimensions=dimensions,
                         issues=issues,
@@ -2127,7 +1737,7 @@ async def stream_improve(request: Request) -> StreamingResponse:
                     f"<content>\n{content_str}\n</content>",
                     queue,
                 )
-                evaluation = _extract_json(eval_response) or {}
+                evaluation = extract_json(eval_response) or {}
 
             # Build improvement prompt with catalogue context
             issues_summary = []
@@ -2176,12 +1786,12 @@ async def stream_improve(request: Request) -> StreamingResponse:
             improved_raw = await session_mgr.run_one_shot_streaming(
                 "improver", improve_prompt, queue
             )
-            improved = _strip_preamble(improved_raw)
+            improved = strip_preamble(improved_raw)
 
             # Compute section-level diff
-            changes = _compute_diff_sections(content_str, improved)
+            changes = compute_diff_sections(content_str, improved)
 
-            new_score, new_grade = _estimate_improved_score(evaluation)
+            new_score, new_grade = estimate_improved_score(evaluation)
             modified = sum(1 for c in changes if c["type"] in ("modified", "added"))
             summary = f"{modified} section(s) improved"
 
@@ -2196,8 +1806,8 @@ async def stream_improve(request: Request) -> StreamingResponse:
                         new_grade=new_grade,
                         improvements_summary=summary,
                         catalogue_neighbors=catalogue_neighbors,
-                        original_token_metrics=_to_token_metrics(content_str),
-                        improved_token_metrics=_to_token_metrics(improved),
+                        original_token_metrics=to_token_metrics(content_str),
+                        improved_token_metrics=to_token_metrics(improved),
                     ).model_dump()
                 },
             )
@@ -2324,7 +1934,7 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
             explain_response = await session_mgr.run_one_shot_streaming(
                 "relevance", explain_prompt, queue
             )
-            explanations_raw = _extract_json(explain_response)
+            explanations_raw = extract_json(explain_response)
 
             # Handle both list and dict responses
             if isinstance(explanations_raw, dict):
@@ -2394,164 +2004,6 @@ async def stream_search_agent(request: Request) -> StreamingResponse:
 # ===================================================================
 # SSE Streaming Endpoint (analyze)
 # ===================================================================
-
-
-@router.post("/api/stream/analyze")
-async def stream_analyze(request: Request):
-    """SSE streaming version of analyze.
-
-    Creates a workflow session, runs analysis steps, and streams
-    progress events to the client via Server-Sent Events.
-    """
-    body = await request.json()
-    content_str = body.get("content", "")
-    if not content_str:
-        raise HTTPException(status_code=400, detail="content is required")
-
-    db_repo = request.app.state.db_repo
-    embedder = request.app.state.embedder
-    session_mgr = request.app.state.session_mgr
-
-    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-
-    async def _emit(event: str, data: dict[str, Any]) -> None:
-        """Put an SSE event on the queue."""
-        await queue.put({"event": event, "data": data})
-
-    async def run_analysis() -> None:
-        try:
-            # --- Parse (non-LLM) ---
-            await _emit("step", {"name": "parse", "status": "running"})
-            document = _parser.parse(content_str)
-
-            # Duplicate check
-            existing = db_repo.find_by_content_hash(document.content_hash)
-            if existing:
-                agent = db_repo.get_agent(existing.agent_id)
-                await _emit(
-                    "duplicate",
-                    {
-                        "agent_name": agent.name if agent else "Unknown",
-                        "content_hash": document.content_hash,
-                    },
-                )
-                return
-
-            await _emit("step", {"name": "parse", "status": "done"})
-
-            # --- Extract metadata (LLM) ---
-            await _emit("step", {"name": "extract", "status": "running"})
-            extraction_response = await session_mgr.run_one_shot(
-                "extractor",
-                f"Extract structured metadata from this AGENTS.md content. "
-                f"Return ONLY valid JSON.\n\n{content_str}",
-            )
-            logger.info(
-                "Extractor response (%d chars): %s...",
-                len(extraction_response),
-                extraction_response[:200],
-            )
-            extracted_json = _extract_json(extraction_response)
-            if extracted_json is None:
-                logger.error(
-                    "Failed to extract JSON from extractor response: %s", extraction_response[:500]
-                )
-            metadata = _build_metadata(extracted_json or {}, document)
-            await _emit(
-                "step",
-                {
-                    "name": "extract",
-                    "status": "done",
-                    "metadata": metadata.model_dump(),
-                },
-            )
-
-            # --- Classify (LLM) ---
-            await _emit("step", {"name": "classify", "status": "running"})
-            classification_response = await session_mgr.run_one_shot(
-                "classifier",
-                f"Classify this agent. Return JSON with: primary_domain, "
-                f"secondary_domains, complexity, autonomy, tags.\n\n{content_str}",
-            )
-            classification = _extract_json(classification_response)
-            if classification:
-                if "tags" in classification:
-                    metadata.keywords = list(
-                        set(metadata.keywords + classification.get("tags", []))
-                    )
-                if "primary_domain" in classification:
-                    pd = classification["primary_domain"]
-                    if pd and pd not in metadata.domains:
-                        metadata.domains = [pd, *metadata.domains]
-            await _emit("step", {"name": "classify", "status": "done"})
-
-            # --- Embedding + similarity (non-LLM) ---
-            await _emit("step", {"name": "similarity", "status": "running"})
-            content_length = len(content_str.strip())
-            if content_length < 200:
-                threshold = 0.85
-            elif content_length < 500:
-                threshold = 0.75
-            else:
-                threshold = 0.6
-
-            embedding = embedder.embed(content_str)
-            similar_with_metadata = db_repo.find_similar_with_metadata(
-                embedding, threshold=threshold, limit=5
-            )
-
-            similar_agents = _comparator.build_comparison_results(
-                new_metadata=metadata,
-                similar_agents=similar_with_metadata,
-            )
-            await _emit(
-                "step",
-                {
-                    "name": "similarity",
-                    "status": "done",
-                    "similar_count": len(similar_agents),
-                },
-            )
-
-            # --- Final result ---
-            has_overlap = any(s.comparison.has_significant_overlap for s in similar_agents)
-            await _emit(
-                "result",
-                {
-                    "metadata": metadata.model_dump(),
-                    "similar_agents": [s.model_dump() for s in similar_agents],
-                    "content_hash": document.content_hash,
-                    "is_duplicate": False,
-                    "has_significant_overlap": has_overlap,
-                },
-            )
-
-        except Exception as e:
-            logger.exception("SSE analysis failed")
-            await queue.put(
-                {
-                    "event": "error",
-                    "data": {"message": str(e)},
-                }
-            )
-        finally:
-            # Signal end of stream
-            await queue.put(None)
-
-    # Fire and forget
-    asyncio.create_task(run_analysis())
-
-    async def event_generator():
-        while True:
-            item = await queue.get()
-            if item is None:
-                yield "data: [DONE]\n\n"
-                break
-            event_type = item.get("event", "message")
-            payload = json.dumps(item.get("data", {}))
-            yield f"event: {event_type}\ndata: {payload}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ===================================================================

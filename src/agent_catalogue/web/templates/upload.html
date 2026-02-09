@@ -891,9 +891,9 @@ async function requestImprovement() {
             const data = await api.improve(contentStr, wizardState.evaluationData, issues, 'improve-activity-feed');
             // Legacy payload handling removed - API client handles it
             // Original payload was: { 
-                content: contentStr,
-                evaluation: wizardState.evaluationData  // Pass Step 4 evaluation to skip re-running
-            });
+            //    content: contentStr,
+            //    evaluation: wizardState.evaluationData  // Pass Step 4 evaluation to skip re-running
+            // });
             await _displayImproveResults(data);
             return;
         } catch {
@@ -1071,7 +1071,7 @@ async function recheckDuplication(content) {
         statusEl.innerHTML = 'Duplication check unavailable - you can still proceed.';
         return;
     }
-
+    try{
         statusEl.classList.remove('checking');
         if (data.has_duplication_risk) {
             statusEl.classList.add('overlap');
@@ -1459,6 +1459,9 @@ document.getElementById('deny-strategy-btn').addEventListener('click', async fun
         // Send deny to cleanup the session
         try {
             await api.approveRecipe(sessionId, pendingStage);
+            console.error('Error denying strategy:', error);
+        }
+        catch (error) {
             console.error('Error denying strategy:', error);
         }
     }
