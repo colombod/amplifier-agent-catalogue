@@ -348,21 +348,43 @@ def _build_event(event: str, data: dict[str, Any]) -> dict[str, Any] | None:
         }
 
     if event == "provider:request":
+        # Debug: log what we're receiving
+        logger.debug("provider:request data keys: %s", list(data.keys()))
+        logger.debug("provider:request data.model: %s", data.get("model", "NOT_FOUND"))
+
+        # Extract model from top-level or request object
+        model = data.get("model", "")
+        if not model and "request" in data:
+            # Fallback: check request object
+            req = data["request"]
+            model = getattr(req, "model", "") if hasattr(req, "model") else ""
+
         return {
             "event": "provider:request",
             "data": {
                 "provider": data.get("provider", ""),
-                "model": data.get("model", ""),
+                "model": model,
             },
         }
 
     if event == "provider:response":
         usage = data.get("usage", {})
+
+        # Debug: log what we're receiving
+        logger.debug("provider:response data keys: %s", list(data.keys()))
+        logger.debug("provider:response has response obj: %s", "response" in data)
+
+        # Extract model from response object (orchestrator contract location)
+        model = data.get("model", "")
+        if not model and "response" in data:
+            resp = data["response"]
+            model = getattr(resp, "model", "") if hasattr(resp, "model") else ""
+
         return {
             "event": "provider:response",
             "data": {
                 "provider": data.get("provider", ""),
-                "model": data.get("model", ""),
+                "model": model,
                 "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
                 "output_tokens": usage.get("output_tokens") if isinstance(usage, dict) else None,
             },
