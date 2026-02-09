@@ -684,7 +684,7 @@ async def stream_refine(request: Request) -> StreamingResponse:
                     "refined_content": refined,
                     "original_content": content_str,
                     "changes": changes,
-                    "token_metrics": token_metrics,
+                    "token_metrics": token_metrics.model_dump(),
                 },
             )
 
