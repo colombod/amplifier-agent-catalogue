@@ -47,7 +47,7 @@ export class ActivityFeed {
 
                 if (!resp.ok) {
                     let detail = `HTTP ${resp.status}`;
-                    try { detail = (await resp.json()).detail || detail; } catch {}
+                    try { detail = (await resp.json()).detail || detail; } catch { }
                     return reject(new Error(detail));
                 }
 
@@ -148,7 +148,7 @@ export class ActivityFeed {
                 const fullText = data.full_text || data.text_preview || '';
                 const len = data.text_length || 0;
                 const agentLabel = agent ? `<strong>${this._esc(agent)}</strong>: ` : '';
-                
+
                 if (btype === 'thinking' && fullText) {
                     // Show reasoning summary
                     const lines = fullText.split('\n').filter(l => l.trim());
@@ -159,7 +159,7 @@ export class ActivityFeed {
                 } else if (btype === 'text' && fullText) {
                     // Show the actual response content with detailed JSON extraction
                     let displayParts = [];
-                    
+
                     // Try to parse as JSON and show structured details
                     if (fullText.trim().startsWith('{') || fullText.includes('```json')) {
                         try {
@@ -169,21 +169,21 @@ export class ActivityFeed {
                             if (jsonMatch) {
                                 jsonText = jsonMatch[1];
                             }
-                            
+
                             const parsed = JSON.parse(jsonText.trim());
-                            
+
                             // Show key summary info
                             if (parsed.overall_score || parsed.grade) {
                                 const score = parsed.overall_score ? `${parsed.overall_score}/10` : '';
                                 const grade = parsed.grade || '';
                                 displayParts.push(`<strong>Quality: ${score} (${grade})</strong>`);
                             }
-                            
+
                             // Show summary if present
                             if (parsed.summary) {
                                 displayParts.push(this._esc(parsed.summary.substring(0, 300)));
                             }
-                            
+
                             // Show issues with severity
                             if (parsed.issues && Array.isArray(parsed.issues) && parsed.issues.length > 0) {
                                 const critical = parsed.issues.filter(i => i.severity === 'critical').length;
@@ -195,13 +195,13 @@ export class ActivityFeed {
                                     minor ? `${minor} minor` : null
                                 ].filter(Boolean).join(', ');
                                 displayParts.push(`<span style="color: var(--warning)">Issues: ${issueBreakdown}</span>`);
-                                
+
                                 // Show first issue detail
                                 if (parsed.issues[0] && parsed.issues[0].description) {
                                     displayParts.push(`• ${this._esc(parsed.issues[0].description.substring(0, 200))}`);
                                 }
                             }
-                            
+
                             // Show strengths
                             if (parsed.strengths && Array.isArray(parsed.strengths) && parsed.strengths.length > 0) {
                                 displayParts.push(`<span style="color: var(--success)">Strengths: ${parsed.strengths.length}</span>`);
@@ -209,12 +209,12 @@ export class ActivityFeed {
                                     displayParts.push(`• ${this._esc(parsed.strengths[0].substring(0, 200))}`);
                                 }
                             }
-                            
+
                             // Show capabilities if present
                             if (parsed.capabilities && Array.isArray(parsed.capabilities)) {
                                 displayParts.push(`Capabilities: ${parsed.capabilities.length}`);
                             }
-                            
+
                             if (displayParts.length > 0) {
                                 // Add each part as a separate line for readability
                                 displayParts.forEach((part, idx) => {

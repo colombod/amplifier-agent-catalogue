@@ -28,7 +28,9 @@
         transition: border-color 0.2s;
     }
 
-    .result-card:hover { border-color: var(--accent); }
+    .result-card:hover {
+        border-color: var(--accent);
+    }
 
     .result-header {
         display: flex;
@@ -44,9 +46,17 @@
         text-align: right;
     }
 
-    .result-score.high { color: #3fb950; }
-    .result-score.medium { color: #d29922; }
-    .result-score.low { color: var(--text-muted); }
+    .result-score.high {
+        color: #3fb950;
+    }
+
+    .result-score.medium {
+        color: #d29922;
+    }
+
+    .result-score.low {
+        color: var(--text-muted);
+    }
 
     .result-explanation {
         font-size: 0.85rem;
@@ -68,7 +78,9 @@
         padding: 3rem 1rem;
     }
 
-    .empty-search h3 { margin-bottom: 0.5rem; }
+    .empty-search h3 {
+        margin-bottom: 0.5rem;
+    }
 
     .empty-search p {
         color: var(--text-muted);
@@ -83,4 +95,6 @@
         padding: 3rem;
     }
 
-    .search-loading p { margin-top: 0.5rem; }
+    .search-loading p {
+        margin-top: 0.5rem;
+    }

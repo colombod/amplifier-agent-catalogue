@@ -1,4 +1,3 @@
-<style>
 /* ==========================================================================
    DIFF VIEW STYLES - Code diff inspired agent comparison
    ========================================================================== */
@@ -37,9 +36,17 @@
     letter-spacing: 0.5px;
 }
 
-.verdict-duplicate { background: #f85149; }
-.verdict-overlapping { background: #d29922; }
-.verdict-distinct { background: #3fb950; }
+.verdict-duplicate {
+    background: #f85149;
+}
+
+.verdict-overlapping {
+    background: #d29922;
+}
+
+.verdict-distinct {
+    background: #3fb950;
+}
 
 .diff-score {
     font-size: 24px;
@@ -47,7 +54,7 @@
 }
 
 .diff-agents {
-    color: rgba(255,255,255,0.8);
+    color: rgba(255, 255, 255, 0.8);
     font-family: system-ui, sans-serif;
     font-size: 14px;
 }
@@ -95,9 +102,17 @@
     flex-direction: column;
 }
 
-.diff-col-a { background: rgba(88, 166, 255, 0.03); }
-.diff-col-shared { background: rgba(63, 185, 80, 0.03); }
-.diff-col-b { background: rgba(248, 81, 73, 0.03); }
+.diff-col-a {
+    background: rgba(88, 166, 255, 0.03);
+}
+
+.diff-col-shared {
+    background: rgba(63, 185, 80, 0.03);
+}
+
+.diff-col-b {
+    background: rgba(248, 81, 73, 0.03);
+}
 
 .diff-content {
     padding: 0.5rem;
@@ -128,9 +143,26 @@
 }
 
 /* Line number style prefix */
-.diff-item-a::before { content: "+"; color: #58a6ff; margin-right: 0.5rem; font-weight: 500; }
-.diff-item-shared::before { content: "="; color: #3fb950; margin-right: 0.5rem; font-weight: 500; }
-.diff-item-b::before { content: "−"; color: #f85149; margin-right: 0.5rem; font-weight: 500; }
+.diff-item-a::before {
+    content: "+";
+    color: #58a6ff;
+    margin-right: 0.5rem;
+    font-weight: 500;
+}
+
+.diff-item-shared::before {
+    content: "=";
+    color: #3fb950;
+    margin-right: 0.5rem;
+    font-weight: 500;
+}
+
+.diff-item-b::before {
+    content: "−";
+    color: #f85149;
+    margin-right: 0.5rem;
+    font-weight: 500;
+}
 
 /* Behavioral diff section */
 .diff-behavioral {
@@ -172,8 +204,13 @@
     font-size: 13px;
 }
 
-.diff-behavioral-value.agent-a { color: #58a6ff; }
-.diff-behavioral-value.agent-b { color: #f85149; }
+.diff-behavioral-value.agent-a {
+    color: #58a6ff;
+}
+
+.diff-behavioral-value.agent-b {
+    color: #f85149;
+}
 
 /* Recommendation box */
 .diff-recommendation {
@@ -192,10 +229,25 @@
     margin-bottom: 0.75rem;
 }
 
-.rec-reject { background: rgba(248, 81, 73, 0.15); color: #f85149; }
-.rec-merge { background: rgba(163, 113, 247, 0.15); color: #a371f7; }
-.rec-keep_both { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
-.rec-replace { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+.rec-reject {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+}
+
+.rec-merge {
+    background: rgba(163, 113, 247, 0.15);
+    color: #a371f7;
+}
+
+.rec-keep_both {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+}
+
+.rec-replace {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+}
 
 .rec-reasoning {
     color: var(--text);
@@ -230,4 +282,3 @@
     font-family: system-ui, sans-serif;
     font-size: 12px;
 }
-</style>

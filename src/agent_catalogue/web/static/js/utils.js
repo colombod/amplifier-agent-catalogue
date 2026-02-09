@@ -24,7 +24,7 @@ export function escapeHtml(unsafe) {
     if (typeof unsafe !== 'string') {
         return '';
     }
-    
+
     return unsafe
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")

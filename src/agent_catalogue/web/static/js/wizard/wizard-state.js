@@ -26,38 +26,38 @@ export class WizardState {
     constructor() {
         /** @type {Object|null} Analysis result from Step 2 */
         this.analysisData = null;
-        
+
         /** @type {File|null} The uploaded file object */
         this.uploadedFile = null;
-        
+
         /** @type {string|null} Original file content as text */
         this.originalContent = null;
-        
+
         /** @type {number} Highest similarity score found (0-1) */
         this.highestSimilarity = 0;
-        
+
         /** @type {Object.<string, Object>} Comparison results by agent ID */
         this.comparedAgents = {};
-        
+
         /** @type {string|null} UUID of last compared agent */
         this.lastComparedAgentId = null;
-        
+
         /** @type {Object|null} Quality evaluation result from Step 4 */
         this.evaluationData = null;
-        
+
         /** @type {string|null} Improved/refined content from improvement step */
         this.improvedContent = null;
-        
+
         /** @type {boolean} Whether to store improved version vs original */
         this.useImprovedVersion = false;
-        
+
         /** @private */
         this._storageKey = 'wizardState';
-        
+
         /** @private */
         this._expirationMs = 10 * 60 * 1000; // 10 minutes
     }
-    
+
     /**
      * Save current state to sessionStorage.
      * Stores only critical data needed for restoration.
@@ -84,7 +84,7 @@ export class WizardState {
             return false;
         }
     }
-    
+
     /**
      * Restore state from sessionStorage.
      * Called internally by checkRestorable() after user confirms.
@@ -106,7 +106,7 @@ export class WizardState {
             return false;
         }
     }
-    
+
     /**
      * Get the current wizard step number (1-5).
      * Determines step by checking DOM for active/completed cards.
@@ -122,7 +122,7 @@ export class WizardState {
         }
         return 1;
     }
-    
+
     /**
      * Check if restorable state exists and offer to resume.
      * Should be called on page load.
@@ -143,30 +143,30 @@ export class WizardState {
         try {
             const raw = sessionStorage.getItem(this._storageKey);
             if (!raw) return false;
-            
+
             const state = JSON.parse(raw);
-            
+
             // Check expiration
             if (Date.now() - state.timestamp > this._expirationMs) {
                 sessionStorage.removeItem(this._storageKey);
                 return false;
             }
-            
+
             // Check if there's meaningful progress to restore
             if (state.step > 1 && state.analysisData) {
                 const resume = confirm('You have an in-progress upload. Resume from where you left off?');
-                
+
                 if (resume) {
                     // Restore state
                     this._restore(state);
-                    
+
                     // Re-render UI
                     displayAnalysis(this.analysisData);
-                    
+
                     if (this.evaluationData && state.step >= 4) {
                         displayQualityEvaluation(this.evaluationData);
                     }
-                    
+
                     return true;
                 } else {
                     // User declined - clear stored state
@@ -174,7 +174,7 @@ export class WizardState {
                     return false;
                 }
             }
-            
+
             return false;
         } catch (e) {
             // Invalid state data - clear it
@@ -183,7 +183,7 @@ export class WizardState {
             return false;
         }
     }
-    
+
     /**
      * Reset all state to initial values.
      * Called when starting over or after successful storage.
@@ -199,7 +199,7 @@ export class WizardState {
         this.evaluationData = null;
         this.improvedContent = null;
         this.useImprovedVersion = false;
-        
+
         try {
             sessionStorage.removeItem(this._storageKey);
         } catch (e) {

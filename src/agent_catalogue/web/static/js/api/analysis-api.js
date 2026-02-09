@@ -54,7 +54,7 @@ export class AnalysisAPI {
      */
     async evaluate(content, evaluation, activityFeedId) {
         const feed = new ActivityFeed(activityFeedId);
-        
+
         // Support both string content and FormData for backwards compatibility
         let payload;
         if (content instanceof FormData) {
@@ -69,7 +69,7 @@ export class AnalysisAPI {
                 evaluation: evaluation
             };
         }
-        
+
         return await feed.start('/api/stream/evaluate', payload);
     }
 
@@ -85,7 +85,7 @@ export class AnalysisAPI {
      */
     async improve(content, evaluation, issues, activityFeedId) {
         const feed = new ActivityFeed(activityFeedId);
-        
+
         // Support both string content and FormData for backwards compatibility
         let payload;
         if (content instanceof FormData) {
@@ -101,7 +101,7 @@ export class AnalysisAPI {
                 issues: issues
             };
         }
-        
+
         return await feed.start('/api/stream/improve', payload);
     }
 
@@ -135,12 +135,12 @@ export class AnalysisAPI {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content })
             });
-            
+
             if (!response.ok) {
                 console.warn('Recheck duplication failed:', response.status);
                 return null;
             }
-            
+
             return await response.json();
         } catch (error) {
             console.warn('Recheck duplication error:', error);
@@ -165,12 +165,12 @@ export class AnalysisAPI {
                 overlap_agents: overlapAgents
             })
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || `Refinement failed: ${response.status}`);
         }
-        
+
         return await response.json();
     }
 
@@ -194,12 +194,12 @@ export class AnalysisAPI {
                 }
             })
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || `Recipe start failed: ${response.status}`);
         }
-        
+
         return await response.json();
     }
 
@@ -220,12 +220,12 @@ export class AnalysisAPI {
                 stage_name: stageName
             })
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || `Approval failed: ${response.status}`);
         }
-        
+
         return await response.json();
     }
 
@@ -239,12 +239,12 @@ export class AnalysisAPI {
      */
     async pollRecipeStatus(sessionId) {
         const response = await fetch(`/api/recipe/status/${sessionId}`);
-        
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || `Status check failed: ${response.status}`);
         }
-        
+
         return await response.json();
     }
 
@@ -259,20 +259,20 @@ export class AnalysisAPI {
      */
     async pollRecipeCompletion(sessionId, intervalMs = 2000, timeoutMs = 300000) {
         const startTime = Date.now();
-        
+
         while (true) {
             // Check timeout
             if (Date.now() - startTime > timeoutMs) {
                 throw new Error('Recipe polling timed out after 5 minutes');
             }
-            
+
             const status = await this.pollRecipeStatus(sessionId);
-            
+
             // Check if completed
             if (status.state === 'completed' || status.state === 'failed') {
                 return status;
             }
-            
+
             // Wait before next poll
             await new Promise(resolve => setTimeout(resolve, intervalMs));
         }
@@ -291,12 +291,12 @@ export class AnalysisAPI {
             method: 'POST',
             body: formData  // Let browser set Content-Type with boundary
         });
-        
+
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || `Storage failed: ${response.status}`);
         }
-        
+
         return await response.json();
     }
 }
