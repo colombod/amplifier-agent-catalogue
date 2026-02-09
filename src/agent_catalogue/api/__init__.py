@@ -107,11 +107,26 @@ def create_app() -> FastAPI:
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # Register routes
-    from agent_catalogue.api.recipes_routes import router as recipes_router
-    from agent_catalogue.api.routes import router
+    # Register routes - organized by domain
+    from agent_catalogue.api import (
+        agents_routes,
+        analysis_routes,
+        comparison_routes,
+        recipes_routes,
+        search_routes,
+        streaming_routes,
+        web_routes,
+    )
 
-    app.include_router(router)
-    app.include_router(recipes_router)
+    # Web routes (no prefix) - must be first for path matching
+    app.include_router(web_routes.router)
+
+    # API domain routes
+    app.include_router(agents_routes.router)
+    app.include_router(analysis_routes.router)
+    app.include_router(streaming_routes.router)
+    app.include_router(search_routes.router)
+    app.include_router(comparison_routes.router)
+    app.include_router(recipes_routes.router)
 
     return app
