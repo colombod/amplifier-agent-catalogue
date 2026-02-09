@@ -99,6 +99,9 @@ class SessionManager:
         self._sticky_sessions: dict[str, AmplifierSession] = {}
         self._last_activity: dict[str, datetime] = {}
 
+        # Workflow metadata (preserves analysis results across stages)
+        self._workflow_metadata: dict[str, dict[str, Any]] = {}
+
     async def startup(self, db_repo: Any, embedder: Any) -> None:
         """Initialize the session manager. Called during FastAPI lifespan startup.
 
@@ -709,6 +712,30 @@ class SessionManager:
             if event_queue:
                 self.sse_bridge.remove_queue(workflow_id)
 
+    def set_workflow_metadata(self, workflow_id: str, key: str, value: Any) -> None:
+        """Store metadata for a workflow (preserves analysis results across stages).
+
+        Use this to store:
+        - similar_agents: List of overlapping agents with similarity scores
+        - highest_similarity: Float score for decision-making
+        - extraction_metadata: Structured agent metadata from extractor
+        - classification: Domain/tag classification results
+
+        This data enriches agent prompts with context from prior stages.
+        """
+        if workflow_id not in self._workflow_metadata:
+            self._workflow_metadata[workflow_id] = {}
+        self._workflow_metadata[workflow_id][key] = value
+        logger.debug("Stored workflow metadata: workflow=%s key=%s", workflow_id, key)
+
+    def get_workflow_metadata(self, workflow_id: str, key: str, default: Any = None) -> Any:
+        """Retrieve metadata for a workflow."""
+        return self._workflow_metadata.get(workflow_id, {}).get(key, default)
+
+    def get_all_workflow_metadata(self, workflow_id: str) -> dict[str, Any]:
+        """Get all metadata for a workflow."""
+        return self._workflow_metadata.get(workflow_id, {})
+
     async def cleanup_workflow(self, workflow_id: str) -> None:
         """Dispose of sticky session and free resources.
 
@@ -730,6 +757,8 @@ class SessionManager:
             del self._sticky_sessions[workflow_id]
             if workflow_id in self._last_activity:
                 del self._last_activity[workflow_id]
+            if workflow_id in self._workflow_metadata:
+                del self._workflow_metadata[workflow_id]
             logger.info("Sticky session cleaned up: workflow=%s", workflow_id)
 
     # -- Session Persistence --------------------------------------------

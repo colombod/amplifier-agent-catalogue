@@ -220,6 +220,37 @@ async def stream_analyze_agent(
                     highest_similarity,
                 )
 
+            # Store similarity data in workflow metadata for later stages
+            if workflow_id:
+                session_mgr.set_workflow_metadata(
+                    workflow_id,
+                    "similar_agents",
+                    [
+                        {
+                            "id": str(s.agent.id),
+                            "name": s.agent.name,
+                            "description": s.agent.description,
+                            "similarity_score": s.similarity_score,
+                            "shared_capabilities": s.comparison.capabilities.shared,
+                            "unique_capabilities": s.comparison.capabilities.only_in_new,
+                            "has_overlap": s.comparison.has_significant_overlap,
+                        }
+                        for s in similar_agents
+                    ],
+                )
+                session_mgr.set_workflow_metadata(
+                    workflow_id, "highest_similarity", highest_similarity
+                )
+                session_mgr.set_workflow_metadata(
+                    workflow_id, "has_significant_overlap", has_significant_overlap
+                )
+                logger.info(
+                    "Stored similarity data for workflow=%s: %d agents, highest=%.2f",
+                    workflow_id,
+                    len(similar_agents),
+                    highest_similarity,
+                )
+
             # Emit final result
             await _emit(
                 "result",
@@ -318,21 +349,53 @@ async def stream_evaluate(request: Request) -> StreamingResponse:
                 },
             )
 
-            eval_prompt = (
-                f"Evaluate the quality of this AGENTS.md file.\n\n"
-                f"Score across 5 dimensions (clarity, completeness, specificity, "
-                f"consistency, differentiation). For each: score 0-10, cite evidence, "
-                f"list issues.\n\n"
-                f"Calculate overall_score using weights: "
-                f"clarity*0.25 + completeness*0.25 + specificity*0.20 "
-                f"+ consistency*0.15 + differentiation*0.15\n\n"
-                f"Assign grade: A (9-10), B (7-8.9), C (5-6.9), D (3-4.9), F (0-2.9)\n\n"
-                f"For each issue: classify severity (critical/major/minor), "
-                f"describe problem, identify location, suggest fix.\n\n"
-                f"Return JSON with: dimensions (list), overall_score, grade, "
-                f"issues (list), strengths (list), summary.\n\n"
+            # Build context-enriched evaluation prompt
+            eval_prompt_parts = [
+                "Evaluate the quality of this AGENTS.md file.\n",
+                "Score across 5 dimensions (clarity, completeness, specificity, ",
+                "consistency, differentiation). For each: score 0-10, cite evidence, ",
+                "list issues.\n\n",
+                "Calculate overall_score using weights: ",
+                "clarity*0.25 + completeness*0.25 + specificity*0.20 ",
+                "+ consistency*0.15 + differentiation*0.15\n\n",
+                "Assign grade: A (9-10), B (7-8.9), C (5-6.9), D (3-4.9), F (0-2.9)\n\n",
+                "For each issue: classify severity (critical/major/minor), ",
+                "describe problem, identify location, suggest fix.\n\n",
+            ]
+
+            # Enrich with similarity context if available
+            if workflow_id:
+                similar_agents = session_mgr.get_workflow_metadata(
+                    workflow_id, "similar_agents", []
+                )
+                highest_sim = session_mgr.get_workflow_metadata(
+                    workflow_id, "highest_similarity", 0.0
+                )
+
+                if similar_agents:
+                    eval_prompt_parts.append(
+                        f"\n**CONTEXT: Catalogue Analysis**\n"
+                        f"This agent has {len(similar_agents)} similar agents in the catalogue "
+                        f"(highest similarity: {highest_sim:.1%}):\n\n"
+                    )
+                    for sa in similar_agents[:3]:  # Top 3
+                        eval_prompt_parts.append(
+                            f"- **{sa['name']}** ({sa['similarity_score']:.1%} similar)\n"
+                            f"  Shared capabilities: {', '.join(sa['shared_capabilities'][:3])}\n"
+                        )
+                    eval_prompt_parts.append(
+                        "\nWhen scoring DIFFERENTIATION dimension, consider this overlap. "
+                        "Strong differentiation requires clear boundaries vs these "
+                        "existing agents.\n\n"
+                    )
+
+            eval_prompt_parts.append(
+                "Return JSON with: dimensions (list), overall_score, grade, "
+                "issues (list), strengths (list), summary.\n\n"
                 f"<content>\n{content_str}\n</content>"
             )
+
+            eval_prompt = "".join(eval_prompt_parts)
 
             if workflow_id:
                 eval_response = await session_mgr.run_with_sticky_session(
@@ -518,25 +581,60 @@ async def stream_improve(request: Request) -> StreamingResponse:
                 },
             )
 
-            improve_prompt_text = (
-                f"Improve this AGENTS.md definition based on the quality evaluation below.\n\n"
-                f"<original_content>\n{content_str}\n</original_content>\n\n"
-                f"<evaluation_summary>\n"
-                f"Overall score: {evaluation.get('overall_score', 'N/A')}/10 "
-                f"(Grade: {evaluation.get('grade', 'N/A')})\n\n"
-                f"Issues to address:\n{issues_text}\n"
-                f"</evaluation_summary>\n\n"
-                f"You have access to tools:\n"
-                f"- search_similar: Search the agent catalogue for similar agents\n"
-                f"- get_agent_content: Read the full AGENTS.md of a specific agent\n\n"
-                f"Use these tools to understand the landscape of existing agents, "
-                f"then generate an improved version that:\n"
-                f"1. Fixes all identified quality issues\n"
-                f"2. Differentiates from similar agents you find in the catalogue\n"
-                f"3. Carves out a unique niche\n\n"
-                f"Original token count: {original_token_count}. Aim for under 1500 tokens.\n\n"
-                f"Output ONLY the improved raw markdown. No preamble, no code fences."
+            # Build improvement prompt with catalogue context
+            improve_prompt_parts = [
+                "Improve this AGENTS.md definition based on the quality evaluation below.\n\n",
+                f"<original_content>\n{content_str}\n</original_content>\n\n",
+                "<evaluation_summary>\n",
+                f"Overall score: {evaluation.get('overall_score', 'N/A')}/10 ",
+                f"(Grade: {evaluation.get('grade', 'N/A')})\n\n",
+                f"Issues to address:\n{issues_text}\n",
+                "</evaluation_summary>\n\n",
+            ]
+
+            # Enrich with stored similarity data (avoid redundant search_similar calls)
+            if workflow_id:
+                similar_agents = session_mgr.get_workflow_metadata(
+                    workflow_id, "similar_agents", []
+                )
+                if similar_agents:
+                    improve_prompt_parts.append(
+                        f"<catalogue_context>\n"
+                        f"Analysis found {len(similar_agents)} similar agents. "
+                        f"Differentiate from these:\n\n"
+                    )
+                    for sa in similar_agents[:3]:
+                        improve_prompt_parts.append(
+                            f"- **{sa['name']}** ({sa['similarity_score']:.1%} similar)\n"
+                            f"  Shared: {', '.join(sa['shared_capabilities'][:3])}\n"
+                            f"  Your unique: {', '.join(sa['unique_capabilities'][:3])}\n"
+                        )
+                    improve_prompt_parts.append(
+                        "\nDO NOT use search_similar - this data is already provided above.\n"
+                        "</catalogue_context>\n\n"
+                    )
+                else:
+                    improve_prompt_parts.append(
+                        "You have access to search_similar and get_agent_content "
+                        "tools if needed.\n\n"
+                    )
+            else:
+                improve_prompt_parts.append(
+                    "You have access to search_similar and get_agent_content tools.\n\n"
+                )
+
+            improve_prompt_parts.extend(
+                [
+                    "Generate an improved version that:\n",
+                    "1. Fixes all identified quality issues\n",
+                    "2. Differentiates from similar agents (using context above)\n",
+                    "3. Carves out a unique niche\n\n",
+                    f"Original token count: {original_token_count}. Aim for under 1500 tokens.\n\n",
+                    "Output ONLY the improved raw markdown. No preamble, no code fences.",
+                ]
             )
+
+            improve_prompt_text = "".join(improve_prompt_parts)
 
             # Use sticky session if workflow_id provided
             if workflow_id:
@@ -630,8 +728,25 @@ async def stream_refine(request: Request) -> StreamingResponse:
                 },
             )
 
-            # Build detailed overlap context with FULL agent content
-            agent_ids = [agent.get("id") for agent in overlapping if agent.get("id")]
+            # Get overlap data from workflow metadata OR frontend
+            if workflow_id:
+                # Prefer stored metadata (has similarity scores and overlap analysis)
+                stored_similar = session_mgr.get_workflow_metadata(
+                    workflow_id, "similar_agents", []
+                )
+                if stored_similar:
+                    logger.info(
+                        "Using stored similarity data: %d agents (highest: %.2f)",
+                        len(stored_similar),
+                        session_mgr.get_workflow_metadata(workflow_id, "highest_similarity", 0.0),
+                    )
+                    # Use stored IDs for fetching full content
+                    agent_ids = [s["id"] for s in stored_similar[:3]]
+                else:
+                    # Fallback to frontend overlapping_agents
+                    agent_ids = [agent.get("id") for agent in overlapping if agent.get("id")]
+            else:
+                agent_ids = [agent.get("id") for agent in overlapping if agent.get("id")]
 
             # Fetch full agent content for strategic analysis
             full_agents = []
