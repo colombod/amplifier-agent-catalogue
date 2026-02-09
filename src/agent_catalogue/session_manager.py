@@ -169,18 +169,14 @@ class SessionManager:
             self._config.providers[0].module if self._config.providers else None,
         )
 
+        # Override bundle: Only specify what's unique to this app
+        # Let foundation bundle provide orchestrator and context modules
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
             session={
                 "default_provider": active_provider,
-                # Explicit orchestrator source for server deployment
-                # Note: Repo is amplifier-module-loop-streaming (NOT orchestrator-loop-streaming)
-                "orchestrator": {
-                    "module": "loop-streaming",
-                    "source": "git+https://github.com/microsoft/amplifier-module-loop-streaming@main"
-                },
             },
         )
 
