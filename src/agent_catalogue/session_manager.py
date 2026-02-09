@@ -222,7 +222,7 @@ class SessionManager:
 
         # CRITICAL: Mount source resolver BEFORE initialize()
         # This allows loader to find modules in bundle cache
-        if hasattr(prepared_bundle, 'resolver'):
+        if hasattr(prepared_bundle, "resolver"):
             await session.coordinator.mount("module-source-resolver", prepared_bundle.resolver)
             logger.debug("Mounted bundle source resolver to session")
 
