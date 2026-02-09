@@ -169,12 +169,16 @@ class SessionManager:
             self._config.providers[0].module if self._config.providers else None,
         )
 
-        # Override bundle: Only specify what's unique to this app
-        # Let foundation bundle provide orchestrator and context modules
+        # Override bundle: Providers + basic orchestrator
+        # Use loop-basic instead of loop-streaming (simpler, no version issues)
         return Bundle(
             name="agent-catalogue-config",
             version="1.0.0",
             providers=providers,
+            modules={
+                "orchestrator": "loop-basic",  # Simple orchestrator, no streaming complexity
+                "context": "context-simple",
+            },
             session={
                 "default_provider": active_provider,
             },
