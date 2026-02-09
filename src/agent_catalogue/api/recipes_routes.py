@@ -62,6 +62,12 @@ async def start_recipe(request: Request, body: RecipeStartRequest) -> dict[str, 
     Returns immediately with session_id. Recipe runs in background.
     Client should poll /api/recipe/status or subscribe to /api/recipe/events.
     """
+    logger.info("=" * 80)
+    logger.info("POST /api/recipe/start - Pattern 2 Strategic Differentiation")
+    logger.info("  Recipe path: %s", body.recipe_path)
+    logger.info("  Context keys: %s", list(body.context.keys()))
+    logger.info("=" * 80)
+
     session_mgr = request.app.state.session_mgr
 
     # Create temp session to access recipes tool

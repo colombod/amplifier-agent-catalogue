@@ -179,21 +179,33 @@ export class AnalysisAPI {
      * @throws {Error} If refinement fails
      */
     async refine(content, overlapAgents) {
+        const payload = {
+            content: content,
+            overlapping_agents: overlapAgents  // Fixed: was "overlap_agents"
+        };
+        
+        console.log('[API] refine() called', { 
+            url: '/api/refine', 
+            contentLength: content.length,
+            agentCount: overlapAgents.length,
+            payload 
+        });
+
         const response = await fetch('/api/refine', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                content: content,
-                overlap_agents: overlapAgents
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
             const error = await response.json();
+            console.error('[API] refine() failed', { status: response.status, error });
             throw new Error(error.detail || `Refinement failed: ${response.status}`);
         }
 
-        return await response.json();
+        const result = await response.json();
+        console.log('[API] refine() success', { hasRefinedContent: !!result.refined_content });
+        return result;
     }
 
     /**
@@ -205,24 +217,37 @@ export class AnalysisAPI {
      * @throws {Error} If recipe start fails
      */
     async startRecipe(content, overlapAgents) {
+        const payload = {
+            recipe_path: 'strategic-differentiation',  // Fixed: was "recipe"
+            context: {
+                content: content,
+                overlapping_agents: overlapAgents  // Fixed: was "overlap_agents"
+            }
+        };
+        
+        console.log('[API] startRecipe() called', {
+            url: '/api/recipe/start',
+            recipePath: payload.recipe_path,
+            contentLength: content.length,
+            agentCount: overlapAgents.length,
+            payload
+        });
+
         const response = await fetch('/api/recipe/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                recipe: 'strategic-differentiation',
-                context: {
-                    content: content,
-                    overlap_agents: overlapAgents
-                }
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
             const error = await response.json();
+            console.error('[API] startRecipe() failed', { status: response.status, error });
             throw new Error(error.detail || `Recipe start failed: ${response.status}`);
         }
 
-        return await response.json();
+        const result = await response.json();
+        console.log('[API] startRecipe() success', { sessionId: result.session_id, status: result.status });
+        return result;
     }
 
     /**

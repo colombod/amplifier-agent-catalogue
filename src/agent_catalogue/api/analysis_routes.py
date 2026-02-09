@@ -540,6 +540,12 @@ async def refine_agent_content(
     Uses the differentiator agent (not improver) which has frameworks for
     niche-carving: narrow scope, different method, adjacent positioning, etc.
     """
+    logger.info("=" * 80)
+    logger.info("POST /api/refine - Pattern 1 Quick Refinement")
+    logger.info("  Content length: %d", len(body.content))
+    logger.info("  Overlapping agents: %d", len(body.overlapping_agents))
+    logger.info("=" * 80)
+
     session_mgr = request.app.state.session_mgr
     db_repo = request.app.state.db_repo
     content_str = body.content
