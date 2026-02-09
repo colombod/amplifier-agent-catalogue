@@ -526,10 +526,62 @@ export class UploadRenderer {
         
         // Show changes if available
         if (changes && changes.length > 0 && changesEl) {
-            this.renderImprovementDiff(changes);
+            this.renderChangesIntoContainer(changes, changesEl);
         }
         
         displayEl.classList.remove('hidden');
+    }
+
+    /**
+     * Render changes diff into a specific container.
+     * 
+     * @param {Array} changes - List of change objects
+     * @param {HTMLElement} container - Target container element
+     */
+    renderChangesIntoContainer(changes, container) {
+        if (!changes || changes.length === 0) {
+            container.innerHTML = '<p class="text-muted">No changes detected.</p>';
+            return;
+        }
+
+        let html = '';
+        for (const change of changes) {
+            if (change.type === 'unchanged') continue;
+
+            const badgeClass = change.type;
+            const badgeLabel = change.type === 'modified' ? 'Modified'
+                : change.type === 'added' ? 'Added' : 'Removed';
+
+            html += `
+                <div class="diff-section" onclick="this.classList.toggle('collapsed')">
+                    <div class="diff-section-header">
+                        <span>${change.section}</span>
+                        <span class="diff-badge ${badgeClass}">${badgeLabel}</span>
+                    </div>
+                    <div class="diff-section-body">`;
+
+            if (change.type === 'modified') {
+                for (const line of (change.original_lines || [])) {
+                    if (line.trim()) html += `<div class="diff-line-removed">- ${this.escapeHtml(line)}</div>`;
+                }
+                html += '<hr style="border-color: var(--border); margin: 0.5rem 0;">';
+                for (const line of (change.improved_lines || [])) {
+                    if (line.trim()) html += `<div class="diff-line-added">+ ${this.escapeHtml(line)}</div>`;
+                }
+            } else if (change.type === 'added') {
+                for (const line of (change.improved_lines || [])) {
+                    if (line.trim()) html += `<div class="diff-line-added">+ ${this.escapeHtml(line)}</div>`;
+                }
+            } else if (change.type === 'removed') {
+                for (const line of (change.original_lines || [])) {
+                    if (line.trim()) html += `<div class="diff-line-removed">- ${this.escapeHtml(line)}</div>`;
+                }
+            }
+
+            html += `</div></div>`;
+        }
+
+        container.innerHTML = html;
     }
 
     /**
