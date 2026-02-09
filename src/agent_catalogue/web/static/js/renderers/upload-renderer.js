@@ -186,14 +186,19 @@ export class UploadRenderer {
             let issuesHtml = `<h4 style="margin-bottom: 1rem;">${issues.length} issue${issues.length > 1 ? 's' : ''} found (${issueCountText.join(', ')})</h4>`;
             issuesHtml += `<p class="text-muted text-sm" style="margin-bottom: 1rem;">Click any issue to collapse details. Issues are auto-expanded for review.</p>`;
             for (const issue of issues) {
+                // Handle both field name formats (description/suggestion OR problem/fix)
+                const description = issue.description || issue.problem || '';
+                const suggestion = issue.suggestion || issue.fix || '';
+                const location = issue.location || '';
+                
                 issuesHtml += `
                     <div class="issue-card ${issue.severity} expanded" onclick="this.classList.toggle('expanded')">
                         <div class="issue-severity">${issue.severity}</div>
-                        <div class="issue-description">${issue.description || ''}</div>
-                        ${issue.suggestion ? `
+                        <div class="issue-description">${description}</div>
+                        ${suggestion ? `
                             <div class="issue-suggestion">
-                                <strong>Suggestion:</strong> ${issue.suggestion}
-                                ${issue.location ? `<br><em>Location: ${issue.location}</em>` : ''}
+                                <strong>Suggestion:</strong> ${suggestion}
+                                ${location ? `<br><em>Location: ${location}</em>` : ''}
                             </div>
                         ` : ''}
                     </div>
