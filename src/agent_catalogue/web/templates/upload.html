@@ -327,9 +327,14 @@
 <script type="module">
 import { escapeHtml } from '/static/js/utils.js';
 import { WizardState } from '/static/js/wizard/wizard-state.js';
+import { AnalysisAPI } from '/static/js/api/analysis-api.js';
+import { ActivityFeed } from '/static/js/components/activity-feed.js';
 
 // Initialize centralized state management
 const wizardState = new WizardState();
+
+// Initialize API client
+const api = new AnalysisAPI();
 
 // Progress narrative for loading states
 function startProgressNarrative(elementId, phases, intervalMs) {
@@ -459,12 +464,10 @@ analyzeBtn.addEventListener('click', async function() {
             <div id="${activityFeedId}" class="activity-feed"></div>
         </div>
     `);
-    
-    const feed = new ActivityFeed(activityFeedId);
 
     try {
-        // Use ActivityFeed.start() - handles all SSE parsing, event routing, and display
-        wizardState.analysisData = await feed.start('/api/stream/analyze', { content: wizardState.originalContent });
+        // Use API client for streaming analysis
+        wizardState.analysisData = await api.analyze(wizardState.originalContent, activityFeedId);
         
         if (wizardState.analysisData) {
             displayAnalysis(wizardState.analysisData);
@@ -603,9 +606,8 @@ async function runQualityEvaluation() {
         feedEl.style.display = 'block';
         spinnerWrap.style.display = 'none';
 
-        const feed = new ActivityFeed('evaluate-activity-feed');
         try {
-            wizardState.evaluationData = await feed.start('/api/stream/evaluate', { content: contentStr });
+            wizardState.evaluationData = await api.evaluate(contentStr, null, 'evaluate-activity-feed');
             displayQualityEvaluation(wizardState.evaluationData);
             return;
         } catch {
@@ -628,28 +630,8 @@ async function runQualityEvaluation() {
     ], 2000);
 
     try {
-        const response = await fetch('/api/evaluate', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            if (evalNarrative) clearInterval(evalNarrative);
-            const error = await response.json();
-            document.getElementById('step-4-loading').classList.add('hidden');
-            document.getElementById('step-4-content').classList.remove('hidden');
-            document.getElementById('quality-header').innerHTML = `
-                <div class="decision-box warning">
-                    <div class="decision-title">Evaluation unavailable</div>
-                    <div>${error.detail || 'Could not evaluate quality. You can still store the agent.'}</div>
-                </div>
-            `;
-            showQualityChoices(null);
-            return;
-        }
-
         if (evalNarrative) clearInterval(evalNarrative);
-        wizardState.evaluationData = await response.json();
+        wizardState.evaluationData = await api.evaluate(formData, null, 'evaluate-activity-feed');
         displayQualityEvaluation(wizardState.evaluationData);
 
     } catch (error) {
@@ -905,9 +887,10 @@ async function requestImprovement() {
         feedEl.style.display = 'block';
         spinnerWrap.style.display = 'none';
 
-        const feed = new ActivityFeed('improve-activity-feed');
         try {
-            const data = await feed.start('/api/stream/improve', { 
+            const data = await api.improve(contentStr, wizardState.evaluationData, issues, 'improve-activity-feed');
+            // Legacy payload handling removed - API client handles it
+            // Original payload was: { 
                 content: contentStr,
                 evaluation: wizardState.evaluationData  // Pass Step 4 evaluation to skip re-running
             });
@@ -933,20 +916,8 @@ async function requestImprovement() {
     formData.append('file', wizardState.uploadedFile);
 
     try {
-        const response = await fetch('/api/improve', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            if (improveNarrative) clearInterval(improveNarrative);
-            const error = await response.json();
-            _showImproveError(error.detail || 'Generation failed. You can store the current version.');
-            return;
-        }
-
         if (improveNarrative) clearInterval(improveNarrative);
-        const data = await response.json();
+        const data = await api.improve(formData, wizardState.evaluationData, issues, 'improve-activity-feed');
         await _displayImproveResults(data);
 
     } catch (error) {
@@ -1091,22 +1062,15 @@ async function recheckDuplication(content) {
     statusEl.classList.add('checking');
     statusEl.innerHTML = '<span class="loading-spinner"></span><span>Checking improved version for duplication...</span>';
 
-    try {
-        const response = await fetch('/api/analyze-improved', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: content })
-        });
-
-        if (!response.ok) {
-            // Non-critical: still allow storing
-            statusEl.classList.remove('checking');
-            statusEl.classList.add('clear');
-            statusEl.innerHTML = 'Duplication check unavailable - you can still proceed.';
-            return;
-        }
-
-        const data = await response.json();
+    const data = await api.recheckDuplication(content);
+    
+    if (!data) {
+        // Non-critical: still allow storing
+        statusEl.classList.remove('checking');
+        statusEl.classList.add('clear');
+        statusEl.innerHTML = 'Duplication check unavailable - you can still proceed.';
+        return;
+    }
 
         statusEl.classList.remove('checking');
         if (data.has_duplication_risk) {
@@ -1232,11 +1196,9 @@ async function deepCompare(agentId, agentName) {
         <div id="${activityFeedId}" class="activity-feed"></div>
     `;
     
-    const feed = new ActivityFeed(activityFeedId);
-    
     try {
-        // Use ActivityFeed.start() - handles all SSE parsing, event routing, and display
-        const data = await feed.start(`/api/stream/compare/${agentId}`, { content: wizardState.originalContent });
+        // Use API client for streaming comparison
+        const data = await api.deepCompare(agentId, wizardState.originalContent, activityFeedId);
         
         if (data) {
             // Store the comparison result
@@ -1377,29 +1339,7 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
     ], 2500);
 
     try {
-        const response = await fetch('/api/refine', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                content: wizardState.improvedContent,
-                overlapping_agents: window._lastOverlapAgents
-            })
-        });
-
-        if (refineNarrative) clearInterval(refineNarrative);
-
-        if (!response.ok) {
-            const error = await response.json();
-            document.getElementById('refine-loading').classList.add('hidden');
-            document.getElementById('improve-actions').classList.remove('hidden');
-            document.getElementById('recheck-status').classList.remove('hidden', 'checking', 'clear');
-            document.getElementById('recheck-status').classList.add('overlap');
-            document.getElementById('recheck-status').innerHTML =
-                `Refinement failed: ${error.detail || 'Unknown error'}. You can still store the current version.`;
-            return;
-        }
-
-        const data = await response.json();
+        const data = await api.refine(wizardState.improvedContent, window._lastOverlapAgents);
         wizardState.improvedContent = data.refined_content;
 
         document.getElementById('refine-loading').classList.add('hidden');
@@ -1441,20 +1381,10 @@ document.getElementById('strategic-diff-btn').addEventListener('click', async fu
         const overlappingAgentIds = window._lastOverlapAgents.map(a => a.id);
 
         // Start recipe execution
-        const response = await fetch('/api/recipe/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                recipe_path: 'recipes/differentiate-agent.yaml',
-                context: {
-                    content: wizardState.improvedContent,
-                    overlapping_agent_ids: overlappingAgentIds,
-                    attempt_number: 1
-                }
-            })
-        });
-
-        const result = await response.json();
+        const result = await api.startRecipe(
+            wizardState.improvedContent || wizardState.originalContent,
+            window._lastOverlapAgents
+        );
 
         if (!response.ok) {
             throw new Error(result.detail || 'Recipe execution failed');
@@ -1499,17 +1429,7 @@ document.getElementById('approve-strategy-btn').addEventListener('click', async 
 
     try {
         // Approve and resume
-        const response = await fetch('/api/recipe/approve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                session_id: sessionId,
-                stage_name: stageName,
-                action: 'approve'
-            })
-        });
-
-        const result = await response.json();
+        const result = await api.approveRecipe(sessionId, stageName);
 
         if (!response.ok) {
             throw new Error(result.detail || 'Approval failed');
@@ -1538,17 +1458,7 @@ document.getElementById('deny-strategy-btn').addEventListener('click', async fun
     if (sessionId && stageName) {
         // Send deny to cleanup the session
         try {
-            await fetch('/api/recipe/approve', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_id: sessionId,
-                    stage_name: stageName,
-                    action: 'deny',
-                    reason: 'User cancelled'
-                })
-            });
-        } catch (error) {
+            await api.approveRecipe(sessionId, pendingStage);
             console.error('Error denying strategy:', error);
         }
     }
@@ -1577,8 +1487,7 @@ async function pollRecipeCompletion(sessionId) {
             }
 
             try {
-                const response = await fetch(`/api/recipe/status/${sessionId}`);
-                const status = await response.json();
+                const status = await api.pollRecipeStatus(sessionId);
 
                 if (status.status === 'completed') {
                     clearInterval(pollInterval);
@@ -1713,18 +1622,10 @@ document.getElementById('pattern1-btn').addEventListener('click', async () => {
     
     // Run Pattern 1 (Quick Refine)
     try {
-        const response = await fetch('/api/refine', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                content: wizardState.originalContent,
-                overlapping_agents: window._lastOverlapAgents
-            })
-        });
-        
-        if (!response.ok) throw new Error('Refinement failed');
-        
-        const data = await response.json();
+        const data = await api.refine(
+            wizardState.improvedContent || wizardState.originalContent,
+            [window._lastOverlapAgents[0]]
+        );
         wizardState.improvedContent = data.refined_content;
         
         // Mark Step 3 complete, proceed to quality analysis on refined content
@@ -1755,20 +1656,10 @@ document.getElementById('pattern2-btn').addEventListener('click', async () => {
     try {
         const overlappingAgentIds = window._lastOverlapAgents.map(a => a.id);
         
-        const response = await fetch('/api/recipe/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                recipe_path: 'recipes/differentiate-agent.yaml',
-                context: {
-                    content: wizardState.originalContent,
-                    overlapping_agent_ids: overlappingAgentIds,
-                    attempt_number: 1
-                }
-            })
-        });
-        
-        const result = await response.json();
+        const result = await api.startRecipe(
+            wizardState.improvedContent || wizardState.originalContent,
+            window._lastOverlapAgents
+        );
         
         if (!response.ok) throw new Error(result.detail || 'Recipe failed');
         
@@ -1869,22 +1760,7 @@ async function storeAgent(btn) {
         btn.innerHTML = '<span class="loading-spinner"></span>Storing...';
         btn.disabled = true;
         
-        const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            document.getElementById('decision-display').innerHTML = `
-                <div class="decision-box danger">
-                    <div class="decision-title">Storing failed</div>
-                    <div>${error.detail || 'Check your connection and try again.'}</div>
-                </div>`;
-            return;
-        }
-        
-        const result = await response.json();
+        const result = await api.storeAgent(formData);
         setStepState(5, 'completed');
         setStepSummary(5, 'Stored');
         sessionStorage.removeItem('wizardState');
