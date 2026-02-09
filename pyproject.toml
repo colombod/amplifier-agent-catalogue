@@ -5,9 +5,9 @@ description = "A web application for cataloguing, versioning, and discovering AG
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Amplifier
-    "amplifier-core",
-    "amplifier-foundation",
+    # Amplifier - latest from main branches
+    "amplifier-core @ git+https://github.com/microsoft/amplifier-core@main",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     # CLI
     "click>=8.1.0",
     # Web framework
