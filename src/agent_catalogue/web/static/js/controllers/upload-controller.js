@@ -808,7 +808,6 @@ export class UploadController {
             }
         };
     }
-}
 
     /**
      * Wire up step header clicks using event delegation.
