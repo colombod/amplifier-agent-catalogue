@@ -1280,13 +1280,12 @@
 {% include "components/diff_view.html" %}
 {% include "components/activity_feed.html" %}
 
-<script>
-let analysisData = null;
-let uploadedFile = null;
-let originalContent = null;  // Store original file content
-let highestSimilarity = 0;
-let comparedAgents = {};  // Store comparison results by agent ID
-let lastComparedAgentId = null;
+<script type="module">
+import { escapeHtml } from '/static/js/utils.js';
+import { WizardState } from '/static/js/wizard/wizard-state.js';
+
+// Initialize centralized state management
+const wizardState = new WizardState();
 
 // Progress narrative for loading states
 function startProgressNarrative(elementId, phases, intervalMs) {
@@ -1362,12 +1361,12 @@ const analyzeBtn = document.getElementById('analyze-btn');
 
 fileInput.addEventListener('change', function() {
     if (this.files.length > 0) {
-        uploadedFile = this.files[0];
+        wizardState.uploadedFile = this.files[0];
         fileWrapper.classList.add('has-file');
-        document.getElementById('file-name').textContent = uploadedFile.name;
+        document.getElementById('file-name').textContent = wizardState.uploadedFile.name;
         document.getElementById('file-name').classList.remove('hidden');
         analyzeBtn.disabled = false;
-        setStepSummary(1, uploadedFile.name);
+        setStepSummary(1, wizardState.uploadedFile.name);
     }
 });
 
@@ -1392,11 +1391,11 @@ fileWrapper.addEventListener('drop', (e) => {
 
 // Analyze button
 analyzeBtn.addEventListener('click', async function() {
-    if (!uploadedFile) return;
+    if (!wizardState.uploadedFile) return;
     
     // CRITICAL: Read file content first and store for later use
     try {
-        originalContent = await uploadedFile.text();
+        wizardState.originalContent = await wizardState.uploadedFile.text();
     } catch (error) {
         alert('Failed to read file content: ' + error.message);
         return;
@@ -1421,10 +1420,10 @@ analyzeBtn.addEventListener('click', async function() {
 
     try {
         // Use ActivityFeed.start() - handles all SSE parsing, event routing, and display
-        analysisData = await feed.start('/api/stream/analyze', { content: originalContent });
+        wizardState.analysisData = await feed.start('/api/stream/analyze', { content: wizardState.originalContent });
         
-        if (analysisData) {
-            displayAnalysis(analysisData);
+        if (wizardState.analysisData) {
+            displayAnalysis(wizardState.analysisData);
         }
         document.getElementById('analyze-progress')?.remove();
         
@@ -1468,10 +1467,10 @@ function displayAnalysis(data) {
     document.getElementById('step-3-content').classList.remove('hidden');
     
     if (data.similar_agents && data.similar_agents.length > 0) {
-        highestSimilarity = Math.max(...data.similar_agents.map(s => s.similarity_score));
-        const mostSimilar = data.similar_agents.find(s => s.similarity_score === highestSimilarity);
+        wizardState.highestSimilarity = Math.max(...data.similar_agents.map(s => s.similarity_score));
+        const mostSimilar = data.similar_agents.find(s => s.similarity_score === wizardState.highestSimilarity);
         
-        setStepSummary(3, `${data.similar_agents.length} similar found (${Math.round(highestSimilarity * 100)}% max)`);
+        setStepSummary(3, `${data.similar_agents.length} similar found (${Math.round(wizardState.highestSimilarity * 100)}% max)`);
         
         // Render similar agents list
         document.getElementById('similar-list').innerHTML = data.similar_agents.map(s => renderSimilarAgent(s)).join('');
@@ -1483,12 +1482,12 @@ function displayAnalysis(data) {
         const hasLikelyDuplicate = data.similar_agents.some(
             s => s.comparison && s.comparison.recommendation === 'likely_duplicate'
         );
-        const needsReview = hasTraitOverlap || hasLikelyDuplicate || highestSimilarity >= 0.85;
-        const shouldOfferEarlyDiff = highestSimilarity >= 0.70;  // Lower threshold for early gate
+        const needsReview = hasTraitOverlap || hasLikelyDuplicate || wizardState.highestSimilarity >= 0.85;
+        const shouldOfferEarlyDiff = wizardState.highestSimilarity >= 0.70;  // Lower threshold for early gate
         
         if (needsReview) {
             // Genuine duplication risk: require review
-            showDuplicationBanner(highestSimilarity, mostSimilar.agent.name);
+            showDuplicationBanner(wizardState.highestSimilarity, mostSimilar.agent.name);
             setStepState(3, 'needs-review');
             document.getElementById('compare-prompt').classList.remove('hidden');
             document.getElementById('step-3-actions').classList.add('hidden');
@@ -1498,7 +1497,7 @@ function displayAnalysis(data) {
             setStepState(5, 'disabled');
         } else if (shouldOfferEarlyDiff) {
             // Moderate overlap (70-84%): offer early differentiation choice
-            showEarlyDifferentiationGate(data.similar_agents, highestSimilarity);
+            showEarlyDifferentiationGate(data.similar_agents, wizardState.highestSimilarity);
             setStepState(3, 'active');  // Keep active, not completed yet
             
             // Force Step 3 to stay expanded to show similar agents
@@ -1529,13 +1528,9 @@ function displayAnalysis(data) {
 
 // ==================== Step 4: Quality Evaluation ====================
 
-let evaluationData = null;
-let improvedContent = null;
-let useImprovedVersion = false;
-
 function enableStep4() {
     // If duplicate, skip quality and go straight to store (blocked)
-    if (analysisData.is_duplicate) {
+    if (wizardState.analysisData.is_duplicate) {
         enableStep5();
         return;
     }
@@ -1551,11 +1546,11 @@ function enableStep4() {
 }
 
 async function runQualityEvaluation() {
-    if (!uploadedFile) return;
+    if (!wizardState.uploadedFile) return;
 
     // Read file content for the streaming endpoint (accepts JSON, not FormData)
     let contentStr;
-    try { contentStr = await uploadedFile.text(); } catch { contentStr = null; }
+    try { contentStr = await wizardState.uploadedFile.text(); } catch { contentStr = null; }
 
     // Try streaming endpoint first — shows real-time agent reasoning
     if (contentStr) {
@@ -1566,8 +1561,8 @@ async function runQualityEvaluation() {
 
         const feed = new ActivityFeed('evaluate-activity-feed');
         try {
-            evaluationData = await feed.start('/api/stream/evaluate', { content: contentStr });
-            displayQualityEvaluation(evaluationData);
+            wizardState.evaluationData = await feed.start('/api/stream/evaluate', { content: contentStr });
+            displayQualityEvaluation(wizardState.evaluationData);
             return;
         } catch {
             // Streaming failed — fall through to classic endpoint
@@ -1578,7 +1573,7 @@ async function runQualityEvaluation() {
 
     // Fallback: classic non-streaming endpoint
     const formData = new FormData();
-    formData.append('file', uploadedFile);
+    formData.append('file', wizardState.uploadedFile);
 
     const evalNarrative = startProgressNarrative('evaluate-progress', [
         'Scoring clarity and completeness...',
@@ -1610,8 +1605,8 @@ async function runQualityEvaluation() {
         }
 
         if (evalNarrative) clearInterval(evalNarrative);
-        evaluationData = await response.json();
-        displayQualityEvaluation(evaluationData);
+        wizardState.evaluationData = await response.json();
+        displayQualityEvaluation(wizardState.evaluationData);
 
     } catch (error) {
         if (evalNarrative) clearInterval(evalNarrative);
@@ -1768,28 +1763,28 @@ function showQualityChoices(data) {
 }
 
 function proceedWithOriginal() {
-    useImprovedVersion = false;
+    wizardState.useImprovedVersion = false;
     setStepState(4, 'completed');
-    const tm = evaluationData && evaluationData.token_metrics;
+    const tm = wizardState.evaluationData && wizardState.evaluationData.token_metrics;
     const tokenInfo = tm ? ` · ${tm.total_tokens.toLocaleString()} tokens (${tm.budget_label.toLowerCase()})` : '';
-    setStepSummary(4, `Grade ${evaluationData ? evaluationData.grade : '?'} · stored as-is${tokenInfo}`);
+    setStepSummary(4, `Grade ${wizardState.evaluationData ? wizardState.evaluationData.grade : '?'} · stored as-is${tokenInfo}`);
     enableStep5();
     document.getElementById('step-5-card').scrollIntoView({ behavior: 'smooth' });
 }
 
 function proceedFromQuality() {
-    useImprovedVersion = false;
+    wizardState.useImprovedVersion = false;
     setStepState(4, 'completed');
-    const tm = evaluationData && evaluationData.token_metrics;
+    const tm = wizardState.evaluationData && wizardState.evaluationData.token_metrics;
     const tokenInfo = tm ? ` · ${tm.total_tokens.toLocaleString()} tokens (${tm.budget_label.toLowerCase()})` : '';
-    setStepSummary(4, `Grade ${evaluationData ? evaluationData.grade : '?'} · ${evaluationData ? evaluationData.overall_score.toFixed(1) : '?'}/10${tokenInfo}`);
+    setStepSummary(4, `Grade ${wizardState.evaluationData ? wizardState.evaluationData.grade : '?'} · ${wizardState.evaluationData ? wizardState.evaluationData.overall_score.toFixed(1) : '?'}/10${tokenInfo}`);
     enableStep5();
     document.getElementById('step-5-card').scrollIntoView({ behavior: 'smooth' });
 }
 
 /** Display improve results (shared by streaming and classic paths). */
 async function _displayImproveResults(data) {
-    improvedContent = data.improved_content;
+    wizardState.improvedContent = data.improved_content;
 
     document.getElementById('improve-loading').classList.add('hidden');
     document.getElementById('improve-results').classList.remove('hidden');
@@ -1830,7 +1825,7 @@ async function _displayImproveResults(data) {
     document.getElementById('improve-actions').classList.remove('hidden');
 
     // Run re-duplication check on improved content
-    await recheckDuplication(improvedContent);
+    await recheckDuplication(wizardState.improvedContent);
 }
 
 /** Show improve error and restore the quality choices panel. */
@@ -1847,7 +1842,7 @@ function _showImproveError(message) {
 }
 
 async function requestImprovement() {
-    if (!uploadedFile) return;
+    if (!wizardState.uploadedFile) return;
 
     // Show improvement below evaluation (keep evaluation visible)
     document.getElementById('quality-choices').classList.add('hidden');
@@ -1857,7 +1852,7 @@ async function requestImprovement() {
 
     // Read file content for streaming endpoint
     let contentStr;
-    try { contentStr = await uploadedFile.text(); } catch { contentStr = null; }
+    try { contentStr = await wizardState.uploadedFile.text(); } catch { contentStr = null; }
 
     // Try streaming endpoint first — shows real-time agent reasoning
     if (contentStr) {
@@ -1870,7 +1865,7 @@ async function requestImprovement() {
         try {
             const data = await feed.start('/api/stream/improve', { 
                 content: contentStr,
-                evaluation: evaluationData  // Pass Step 4 evaluation to skip re-running
+                evaluation: wizardState.evaluationData  // Pass Step 4 evaluation to skip re-running
             });
             await _displayImproveResults(data);
             return;
@@ -1891,7 +1886,7 @@ async function requestImprovement() {
     ], 2500);
 
     const formData = new FormData();
-    formData.append('file', uploadedFile);
+    formData.append('file', wizardState.uploadedFile);
 
     try {
         const response = await fetch('/api/improve', {
@@ -2046,12 +2041,6 @@ function renderImprovementDiff(changes) {
     container.innerHTML = html || '<p class="text-muted">No meaningful changes.</p>';
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
 async function recheckDuplication(content) {
     const statusEl = document.getElementById('recheck-status');
     statusEl.classList.remove('hidden', 'clear', 'overlap');
@@ -2115,7 +2104,7 @@ function enableStep5() {
     document.getElementById('step-5-empty').classList.add('hidden');
     document.getElementById('step-5-content').classList.remove('hidden');
     
-    if (analysisData.is_duplicate) {
+    if (wizardState.analysisData.is_duplicate) {
         setStepSummary(5, 'Blocked - duplicate');
         document.getElementById('decision-display').innerHTML = `
             <div class="decision-box danger">
@@ -2124,20 +2113,20 @@ function enableStep5() {
             </div>
         `;
         document.getElementById('store-btn').disabled = true;
-    } else if (highestSimilarity >= 0.8) {
+    } else if (wizardState.highestSimilarity >= 0.8) {
         setStepSummary(5, 'Ready (reviewed)');
         document.getElementById('decision-display').innerHTML = `
             <div class="decision-box warning">
                 <div class="decision-title">&#9888;&#65039; Storing with High Overlap</div>
-                <div>This agent has ${Math.round(highestSimilarity * 100)}% similarity. Consider if updating the existing agent would be better.</div>
+                <div>This agent has ${Math.round(wizardState.highestSimilarity * 100)}% similarity. Consider if updating the existing agent would be better.</div>
             </div>
         `;
-    } else if (highestSimilarity >= 0.6) {
+    } else if (wizardState.highestSimilarity >= 0.6) {
         setStepSummary(5, 'Ready (reviewed)');
         document.getElementById('decision-display').innerHTML = `
             <div class="decision-box info">
                 <div class="decision-title">&#8505;&#65039; Overlap Acknowledged</div>
-                <div>This agent has ${Math.round(highestSimilarity * 100)}% overlap with existing agents. Ready to store.</div>
+                <div>This agent has ${Math.round(wizardState.highestSimilarity * 100)}% overlap with existing agents. Ready to store.</div>
             </div>
         `;
     } else {
@@ -2145,8 +2134,8 @@ function enableStep5() {
         document.getElementById('decision-display').innerHTML = `
             <div class="decision-box success">
                 <div class="decision-title">&#10003; Ready to Store</div>
-                <div>${useImprovedVersion ? 'Storing improved version.' : 
-                    (analysisData.similar_agents && analysisData.similar_agents.length > 0 
+                <div>${wizardState.useImprovedVersion ? 'Storing improved version.' : 
+                    (wizardState.analysisData.similar_agents && wizardState.analysisData.similar_agents.length > 0 
                     ? 'Low overlap with existing agents. Safe to add.' 
                     : 'No overlap detected. Ready to add.')}</div>
             </div>
@@ -2158,7 +2147,7 @@ function renderSimilarAgent(similar) {
     const score = similar.similarity_score;
     const scoreClass = score >= 0.8 ? 'high' : score >= 0.6 ? 'medium' : 'low';
     const cardClass = score >= 0.8 ? 'high-overlap' : score >= 0.6 ? 'medium-overlap' : '';
-    const isCompared = comparedAgents[similar.agent.id];
+    const isCompared = wizardState.comparedAgents[similar.agent.id];
     
     return `
         <div class="similar-agent ${cardClass} ${isCompared ? 'compared' : ''}" id="similar-${similar.agent.id}">
@@ -2188,7 +2177,7 @@ function renderSimilarAgent(similar) {
 
 // Deep comparison with SSE progress updates
 async function deepCompare(agentId, agentName) {
-    if (!originalContent) return;
+    if (!wizardState.originalContent) return;
     
     document.getElementById('diff-modal').classList.remove('hidden');
     document.getElementById('diff-modal-title').textContent = `Comparing with ${agentName}`;
@@ -2203,16 +2192,16 @@ async function deepCompare(agentId, agentName) {
     
     try {
         // Use ActivityFeed.start() - handles all SSE parsing, event routing, and display
-        const data = await feed.start(`/api/stream/compare/${agentId}`, { content: originalContent });
+        const data = await feed.start(`/api/stream/compare/${agentId}`, { content: wizardState.originalContent });
         
         if (data) {
             // Store the comparison result
-            comparedAgents[agentId] = {
+            wizardState.comparedAgents[agentId] = {
                 data: data,
                 agentName: agentName,
                 timestamp: new Date()
             };
-            lastComparedAgentId = agentId;
+            wizardState.lastComparedAgentId = agentId;
             
             // Render the diff
             renderBehavioralDiff(data.comparison, 'diff-container', data.existing_agent, data.new_agent, data.narrative);
@@ -2222,7 +2211,7 @@ async function deepCompare(agentId, agentName) {
             if (card) {
                 card.classList.add('compared');
                 // Re-render to update buttons
-                const similar = analysisData.similar_agents.find(s => s.agent.id === agentId);
+                const similar = wizardState.analysisData.similar_agents.find(s => s.agent.id === agentId);
                 if (similar) {
                     card.outerHTML = renderSimilarAgent(similar);
                 }
@@ -2234,7 +2223,7 @@ async function deepCompare(agentId, agentName) {
             
             // Update step state
             setStepState(3, 'active');
-            setStepSummary(3, `Compared (${Math.round(highestSimilarity * 100)}% overlap)`);
+            setStepSummary(3, `Compared (${Math.round(wizardState.highestSimilarity * 100)}% overlap)`);
         }
         
     } catch (error) {
@@ -2246,7 +2235,7 @@ async function deepCompare(agentId, agentName) {
 
 // View stored comparison
 function viewStoredComparison(agentId) {
-    const stored = comparedAgents[agentId];
+    const stored = wizardState.comparedAgents[agentId];
     if (!stored) {
         return;
     }
@@ -2264,8 +2253,8 @@ function viewStoredComparison(agentId) {
 
 // View last comparison button
 document.getElementById('view-last-comparison-btn').addEventListener('click', () => {
-    if (lastComparedAgentId && comparedAgents[lastComparedAgentId]) {
-        viewStoredComparison(lastComparedAgentId);
+    if (wizardState.lastComparedAgentId && wizardState.comparedAgents[wizardState.lastComparedAgentId]) {
+        viewStoredComparison(wizardState.lastComparedAgentId);
     } else {
         return;
     }
@@ -2281,7 +2270,7 @@ document.getElementById('proceed-to-store-btn').addEventListener('click', () => 
 
 // Skip comparison button
 document.getElementById('skip-compare-btn').addEventListener('click', () => {
-    if (highestSimilarity >= 0.8) {
+    if (wizardState.highestSimilarity >= 0.8) {
         if (!confirm('High duplication detected. Are you sure you want to skip the deep comparison?')) {
             return;
         }
@@ -2311,25 +2300,25 @@ document.getElementById('store-btn').addEventListener('click', async function() 
 
 // Store improved version button
 document.getElementById('store-improved-btn').addEventListener('click', async function() {
-    useImprovedVersion = true;
+    wizardState.useImprovedVersion = true;
     setStepState(4, 'completed');
-    setStepSummary(4, `Improved (est. ${evaluationData?.estimated_improved_grade || '?'})`);
+    setStepSummary(4, `Improved (est. ${wizardState.evaluationData?.estimated_improved_grade || '?'})`);
     enableStep5();
     document.getElementById('step-5-card').scrollIntoView({ behavior: 'smooth' });
 });
 
 // Store original instead button (from improvement view)
 document.getElementById('store-original-btn').addEventListener('click', () => {
-    useImprovedVersion = false;
+    wizardState.useImprovedVersion = false;
     setStepState(4, 'completed');
-    setStepSummary(4, `Grade ${evaluationData ? evaluationData.grade : '?'} (as-is)`);
+    setStepSummary(4, `Grade ${wizardState.evaluationData ? wizardState.evaluationData.grade : '?'} (as-is)`);
     enableStep5();
     document.getElementById('step-5-card').scrollIntoView({ behavior: 'smooth' });
 });
 
 // Refine to reduce overlap button
 document.getElementById('refine-overlap-btn').addEventListener('click', async function() {
-    if (!improvedContent || !window._lastOverlapAgents) return;
+    if (!wizardState.improvedContent || !window._lastOverlapAgents) return;
 
     // Show refine loading, hide actions
     document.getElementById('improve-actions').classList.add('hidden');
@@ -2348,7 +2337,7 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: improvedContent,
+                content: wizardState.improvedContent,
                 overlapping_agents: window._lastOverlapAgents
             })
         });
@@ -2367,7 +2356,7 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
         }
 
         const data = await response.json();
-        improvedContent = data.refined_content;
+        wizardState.improvedContent = data.refined_content;
 
         document.getElementById('refine-loading').classList.add('hidden');
 
@@ -2383,7 +2372,7 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
         // Re-run duplication check on the refined version
         document.getElementById('improve-actions').classList.remove('hidden');
         document.getElementById('refine-overlap-btn').style.display = 'none';
-        await recheckDuplication(improvedContent);
+        await recheckDuplication(wizardState.improvedContent);
 
     } catch (error) {
         if (refineNarrative) clearInterval(refineNarrative);
@@ -2396,7 +2385,7 @@ document.getElementById('refine-overlap-btn').addEventListener('click', async fu
 
 // Strategic Differentiation button (Pattern 2 - Recipe-based)
 document.getElementById('strategic-diff-btn').addEventListener('click', async function() {
-    if (!improvedContent || !window._lastOverlapAgents) return;
+    if (!wizardState.improvedContent || !window._lastOverlapAgents) return;
 
     // Show loading, hide actions
     document.getElementById('improve-actions').classList.add('hidden');
@@ -2414,7 +2403,7 @@ document.getElementById('strategic-diff-btn').addEventListener('click', async fu
             body: JSON.stringify({
                 recipe_path: 'recipes/differentiate-agent.yaml',
                 context: {
-                    content: improvedContent,
+                    content: wizardState.improvedContent,
                     overlapping_agent_ids: overlappingAgentIds,
                     attempt_number: 1
                 }
@@ -2442,7 +2431,7 @@ document.getElementById('strategic-diff-btn').addEventListener('click', async fu
             document.getElementById('strategy-approval-modal').classList.remove('hidden');
         } else if (result.status === 'completed') {
             // Recipe completed without approval gate
-            handleStrategyComplete(result.summary?.refined_content || improvedContent);
+            handleStrategyComplete(result.summary?.refined_content || wizardState.improvedContent);
         }
 
     } catch (error) {
@@ -2577,7 +2566,7 @@ function handleStrategyComplete(refinedContent) {
     document.getElementById('refine-loading').classList.add('hidden');
     
     // Update improved content
-    improvedContent = refinedContent;
+    wizardState.improvedContent = refinedContent;
     
     // Display the refined content
     document.getElementById('improve-content-display').innerHTML = 
@@ -2595,14 +2584,14 @@ function handleStrategyComplete(refinedContent) {
 }
 
 // Early differentiation gate handlers
-function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
+function showEarlyDifferentiationGate(similarAgents, wizardState.highestSimilarity) {
     const gateEl = document.getElementById('early-diff-gate');
     const summaryEl = document.getElementById('overlap-summary');
     const percentageEl = document.getElementById('overlap-percentage');
     
     // Update percentage display
     if (percentageEl) {
-        percentageEl.textContent = (highestSimilarity * 100).toFixed(0);
+        percentageEl.textContent = (wizardState.highestSimilarity * 100).toFixed(0);
     }
     
     // CRITICAL: Store overlap agents for pattern buttons to use
@@ -2670,7 +2659,7 @@ function showEarlyDifferentiationGate(similarAgents, highestSimilarity) {
 
 // Pattern picker handlers
 document.getElementById('pattern1-btn').addEventListener('click', async () => {
-    if (!originalContent || !window._lastOverlapAgents) return;
+    if (!wizardState.originalContent || !window._lastOverlapAgents) return;
     
     // Hide picker
     document.getElementById('pattern-picker').classList.add('hidden');
@@ -2684,7 +2673,7 @@ document.getElementById('pattern1-btn').addEventListener('click', async () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: originalContent,
+                content: wizardState.originalContent,
                 overlapping_agents: window._lastOverlapAgents
             })
         });
@@ -2692,7 +2681,7 @@ document.getElementById('pattern1-btn').addEventListener('click', async () => {
         if (!response.ok) throw new Error('Refinement failed');
         
         const data = await response.json();
-        improvedContent = data.refined_content;
+        wizardState.improvedContent = data.refined_content;
         
         // Mark Step 3 complete, proceed to quality analysis on refined content
         setStepState(3, 'completed');
@@ -2710,7 +2699,7 @@ document.getElementById('pattern1-btn').addEventListener('click', async () => {
 });
 
 document.getElementById('pattern2-btn').addEventListener('click', async () => {
-    if (!originalContent || !window._lastOverlapAgents) return;
+    if (!wizardState.originalContent || !window._lastOverlapAgents) return;
     
     // Hide picker
     document.getElementById('pattern-picker').classList.add('hidden');
@@ -2728,7 +2717,7 @@ document.getElementById('pattern2-btn').addEventListener('click', async () => {
             body: JSON.stringify({
                 recipe_path: 'recipes/differentiate-agent.yaml',
                 context: {
-                    content: originalContent,
+                    content: wizardState.originalContent,
                     overlapping_agent_ids: overlappingAgentIds,
                     attempt_number: 1
                 }
@@ -2749,7 +2738,7 @@ document.getElementById('pattern2-btn').addEventListener('click', async () => {
             document.getElementById('strategy-approval-modal').classList.remove('hidden');
         } else if (result.status === 'completed') {
             // Recipe completed, proceed to quality
-            improvedContent = result.summary?.refined_content || originalContent;
+            wizardState.improvedContent = result.summary?.refined_content || wizardState.originalContent;
             setStepState(3, 'completed');
             setStepSummary(3, 'Differentiated (Pattern 2)');
             enableStep4();
@@ -2795,10 +2784,10 @@ function enableStep5WithDifferentiation() {
     document.getElementById('strategic-diff-btn').style.display = '';
     
     // Make improved content available (use original since we skipped improvement)
-    improvedContent = originalContent;
+    wizardState.improvedContent = wizardState.originalContent;
     
     // Store overlap agents for differentiation
-    window._lastOverlapAgents = analysisData.similar_agents.map(s => ({
+    window._lastOverlapAgents = wizardState.analysisData.similar_agents.map(s => ({
         id: s.agent.id,
         name: s.agent.name,
         description: s.agent.description || '',
@@ -2820,12 +2809,12 @@ document.getElementById('cancel-upload-btn').addEventListener('click', () => {
 async function storeAgent(btn) {
     const formData = new FormData();
 
-    if (useImprovedVersion && improvedContent) {
+    if (wizardState.useImprovedVersion && wizardState.improvedContent) {
         // Create a Blob from the improved content and wrap as File
-        const blob = new Blob([improvedContent], { type: 'text/markdown' });
-        formData.append('file', blob, uploadedFile ? uploadedFile.name : 'AGENTS.md');
-    } else if (uploadedFile) {
-        formData.append('file', uploadedFile);
+        const blob = new Blob([wizardState.improvedContent], { type: 'text/markdown' });
+        formData.append('file', blob, wizardState.uploadedFile ? wizardState.uploadedFile.name : 'AGENTS.md');
+    } else if (wizardState.uploadedFile) {
+        formData.append('file', wizardState.uploadedFile);
     } else {
         return;
     }
@@ -2885,75 +2874,23 @@ async function storeAgent(btn) {
 // Reset button
 document.getElementById('reset-btn').addEventListener('click', () => {
     if (confirm('Start over? This will discard all analysis progress.')) {
-        sessionStorage.removeItem('wizardState');
+        wizardState.reset();
         location.reload();
     }
 });
 
 // ==================== Wizard State Persistence ====================
 
-function saveWizardState() {
-    try {
-        const state = {
-            step: getCurrentStep(),
-            analysisData: analysisData,
-            evaluationData: evaluationData,
-            highestSimilarity: highestSimilarity,
-            timestamp: Date.now()
-        };
-        sessionStorage.setItem('wizardState', JSON.stringify(state));
-    } catch (e) {
-        // sessionStorage may be unavailable - ignore
-    }
-}
-
-function getCurrentStep() {
-    for (let i = 5; i >= 1; i--) {
-        const card = document.getElementById(`step-${i}-card`);
-        if (card && (card.classList.contains('active') || card.classList.contains('completed'))) {
-            return i;
-        }
-    }
-    return 1;
-}
-
-function checkResumeState() {
-    try {
-        const raw = sessionStorage.getItem('wizardState');
-        if (!raw) return;
-        const state = JSON.parse(raw);
-        // Expire after 10 minutes
-        if (Date.now() - state.timestamp > 10 * 60 * 1000) {
-            sessionStorage.removeItem('wizardState');
-            return;
-        }
-        if (state.step > 1 && state.analysisData) {
-            const resume = confirm('You have an in-progress upload. Resume from where you left off?');
-            if (resume) {
-                analysisData = state.analysisData;
-                evaluationData = state.evaluationData;
-                highestSimilarity = state.highestSimilarity || 0;
-                displayAnalysis(analysisData);
-                if (state.evaluationData && state.step >= 4) {
-                    displayQualityEvaluation(state.evaluationData);
-                }
-            } else {
-                sessionStorage.removeItem('wizardState');
-            }
-        }
-    } catch (e) {
-        sessionStorage.removeItem('wizardState');
-    }
-}
-
 // Save state after key transitions
 const origSetStepState = setStepState;
 setStepState = function(stepNum, state) {
     origSetStepState(stepNum, state);
-    if (state === 'completed') saveWizardState();
+    if (state === 'completed') {
+        wizardState.save();
+    }
 };
 
-// Check for resume on load
-checkResumeState();
+// Check for restorable state on page load
+wizardState.checkRestorable(displayAnalysis, displayQualityEvaluation);
 </script>
 {% endblock %}
