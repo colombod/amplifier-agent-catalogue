@@ -31,7 +31,7 @@ How independently it operates:
 Primary behavior archetype:
 - specialist, generalist, orchestrator, guardian, builder, explorer
 
-Use the domain-taxonomy skill for classification criteria.
+Use the reference knowledge below for classification criteria.
 
 Output as JSON:
 ```json
