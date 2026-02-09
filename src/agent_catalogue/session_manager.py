@@ -213,6 +213,12 @@ class SessionManager:
             len(mount_plan.get("tools", [])),
         )
 
+        # Debug: Log what we have
+        logger.info(f"Prepared bundle type: {type(prepared_bundle).__name__}")
+        logger.info(f"Prepared bundle has resolver attr: {hasattr(prepared_bundle, 'resolver')}")
+        logger.info(f"Prepared bundle has _resolver attr: {hasattr(prepared_bundle, '_resolver')}")
+        logger.info(f"Prepared bundle attrs: {[a for a in dir(prepared_bundle) if 'resolv' in a.lower() or 'source' in a.lower()]}")
+
         # Create session
         session = AmplifierSession(
             config=mount_plan,
@@ -221,10 +227,20 @@ class SessionManager:
         )
 
         # CRITICAL: Mount source resolver BEFORE initialize()
-        # This allows loader to find modules in bundle cache
+        # Try different attribute names
+        resolver = None
         if hasattr(prepared_bundle, "resolver"):
-            await session.coordinator.mount("module-source-resolver", prepared_bundle.resolver)
-            logger.debug("Mounted bundle source resolver to session")
+            resolver = prepared_bundle.resolver
+        elif hasattr(prepared_bundle, "_resolver"):
+            resolver = prepared_bundle._resolver
+        elif hasattr(prepared_bundle, "source_resolver"):
+            resolver = prepared_bundle.source_resolver
+        
+        if resolver:
+            await session.coordinator.mount("module-source-resolver", resolver)
+            logger.info("✅ Mounted bundle source resolver to session")
+        else:
+            logger.error("❌ Could not find resolver on prepared_bundle - session will fail to load modules")
 
         # Now initialize can find modules
         await session.initialize()
