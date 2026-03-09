@@ -42,6 +42,7 @@ from amplifier_foundation import Bundle, load_bundle
 
 from agent_catalogue.config import Config
 from agent_catalogue.paths import get_agents_dir, get_cache_dir, get_context_dir
+from agent_catalogue.provider_utils import KNOWN_PROVIDER_SOURCES
 from agent_catalogue.session_store import SessionStore
 from agent_catalogue.sse_bridge import SSEBridge
 from agent_catalogue.tools import create_catalogue_tools
@@ -59,6 +60,30 @@ AGENT_SKILLS: dict[str, list[str]] = {
     "differentiator": ["agent-anatomy.md", "behavior-patterns.md", "domain-taxonomy.md"],
     "discovery": ["domain-taxonomy.md", "agent-anatomy.md"],
     "relevance": ["domain-taxonomy.md", "behavior-patterns.md"],
+}
+
+# Map agent names to their routing-matrix model roles.
+# These roles tell the hooks-routing hook which model tier to select
+# from the active routing matrix for each specialist agent.
+#
+# Role reference (from routing-matrix):
+#   fast      — quick parsing, classification, structured extraction
+#   coding    — code/content generation with constraints
+#   reasoning — deep multi-step analysis, strategic thinking
+#   critique  — analytical evaluation, finding flaws
+#   writing   — long-form prose, narrative generation
+#   creative  — aesthetic judgment, generative ideation
+#   general   — versatile catch-all (default)
+AGENT_MODEL_ROLES: dict[str, str] = {
+    "extractor": "fast",  # Structured JSON extraction — mechanical, well-defined
+    "classifier": "fast",  # Categorization along defined dimensions
+    "evaluator": "critique",  # Quality scoring — requires analytical judgment
+    "improver": "coding",  # Rewriting content to address issues
+    "differentiator": "reasoning",  # Strategic positioning across frameworks
+    "comparator": "critique",  # Detailed behavioral comparison
+    "narrator": "writing",  # Transforming data into prose
+    "discovery": "creative",  # Generating hypothetical content (HyDE)
+    "relevance": "fast",  # Scoring/ranking relevance — well-defined
 }
 
 
@@ -139,19 +164,13 @@ class SessionManager:
         Uses uv pip install with git URLs to install both the provider module
         code AND its dependencies (anthropic, openai SDKs, etc.).
 
-        This follows the amplifier-app-cli pattern from install_known_providers().
+        Uses KNOWN_PROVIDER_SOURCES from provider_utils (mirrors amplifier-app-cli's
+        DEFAULT_PROVIDER_SOURCES) to resolve all 7 ecosystem providers.
         """
         import subprocess
         import sys
 
-        # Well-known provider sources (from amplifier-app-cli DEFAULT_PROVIDER_SOURCES)
-        KNOWN_PROVIDER_SOURCES = {
-            "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
-            "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
-            "provider-azure-openai": "git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main",
-        }
-
-        # Get providers configured in settings
+        # Get providers configured in settings that have known sources
         providers_to_install = [
             p.module for p in self._config.providers if p.module in KNOWN_PROVIDER_SOURCES
         ]
@@ -160,32 +179,31 @@ class SessionManager:
             logger.info("No known providers to install")
             return
 
-        logger.info(f"Installing providers: {providers_to_install}")
+        logger.info("Installing providers: %s", providers_to_install)
 
         for provider_module in providers_to_install:
             source = KNOWN_PROVIDER_SOURCES[provider_module]
-            logger.info(f"Installing {provider_module} from {source}...")
+            logger.info("Installing %s from %s...", provider_module, source)
 
             try:
-                # Use uv pip install to install the provider module + dependencies
-                # --python sys.executable ensures it goes into current venv
                 subprocess.run(
                     ["uv", "pip", "install", "--python", sys.executable, source],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
-                logger.info(f"✓ Installed {provider_module}")
+                logger.info("Installed %s", provider_module)
 
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to install {provider_module}: {e.stderr}")
+                logger.error("Failed to install %s: %s", provider_module, e.stderr)
                 raise RuntimeError(f"Provider installation failed: {provider_module}") from e
 
     async def _get_recipes_bundle(self) -> Any:
-        """Get the prepared foundation bundle with custom providers and recipes tool.
+        """Get the prepared foundation bundle with custom providers, routing, and recipes.
 
         Uses foundation as the base (application foundation) and adds:
-        - Custom providers from settings.yaml
+        - Custom providers from settings.yaml (any of the 7 ecosystem providers)
+        - hooks-routing for model_role-based provider/model selection
         - tool-recipes for recipe execution capabilities
         - Custom orchestrator/context configuration
 
@@ -205,22 +223,23 @@ class SessionManager:
 
             # 3. Compose foundation + override
             composed = foundation_bundle.compose(override)
-            logger.info("Composed bundle with custom providers and recipes tool")
+            logger.info("Composed bundle with providers, routing hook, and recipes tool")
 
             # 4. Prepare (download/install modules) - returns PreparedBundle
             prepared = await composed.prepare(install_deps=True)
             logger.info("Prepared bundle (modules installed)")
-            logger.info(f"Prepared bundle type: {type(prepared).__name__}")
+            logger.info("Prepared bundle type: %s", type(prepared).__name__)
 
             self._prepared_bundles["recipes"] = prepared
 
         return self._prepared_bundles["recipes"]
 
     def _create_override_bundle(self) -> Bundle:
-        """Create override bundle with custom providers, tools, and config.
+        """Create override bundle with providers, routing, tools, and session config.
 
         Adds to foundation:
-        - Custom providers (Azure, Anthropic) from settings.yaml
+        - All configured providers (Anthropic, OpenAI, Azure, Gemini, Copilot, etc.)
+        - hooks-routing for model_role-based routing via the routing-matrix
         - tool-recipes for recipe execution capabilities
         - default_provider selection (REQUIRED to activate providers)
         - Custom orchestrator (loop-basic) and context (context-simple)
@@ -229,25 +248,23 @@ class SessionManager:
         - All standard tools (filesystem, bash, web, search, delegate)
         - Base orchestrator/context modules (overridden here)
         - Hook system and event infrastructure
+
+        The hooks-routing hook enables each specialist agent to use the optimal
+        model tier via AGENT_MODEL_ROLES. The routing matrix resolves roles
+        (fast, coding, reasoning, critique, writing, creative) to concrete
+        provider/model pairs based on what's installed.
         """
-        # Build providers list from app config
+        # Build providers list from app config — resolve source URLs dynamically
         providers = []
         for prov in self._config.providers:
-            provider_config = {
+            provider_config: dict[str, Any] = {
                 "module": prov.module,
                 "config": dict(prov.config),
             }
 
-            # Add source URL for module download
-            # These are standard Amplifier provider modules
-            if prov.module == "provider-azure-openai":
-                provider_config["source"] = (
-                    "git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main"
-                )
-            elif prov.module == "provider-anthropic":
-                provider_config["source"] = (
-                    "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main"
-                )
+            # Resolve source URL from KNOWN_PROVIDER_SOURCES (all 7 ecosystem providers)
+            if prov.module in KNOWN_PROVIDER_SOURCES:
+                provider_config["source"] = KNOWN_PROVIDER_SOURCES[prov.module]
 
             providers.append(provider_config)
 
@@ -265,7 +282,23 @@ class SessionManager:
             }
         ]
 
-        # Override bundle: Providers + tools + explicit orchestrator/context configs
+        # hooks-routing: enables model_role-based routing via the routing-matrix.
+        # This follows the amplifier-app-cli pattern from runtime/config.py:159-171.
+        # The hook resolves AGENT_MODEL_ROLES to concrete provider/model pairs
+        # by consulting the active matrix (balanced, quality, economy, copilot, etc.).
+        routing_config = self._config.routing
+        hooks = [
+            {
+                "module": "hooks-routing",
+                "source": "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=modules/hooks-routing",
+                "config": {
+                    "default_matrix": routing_config.matrix,
+                    "overrides": routing_config.overrides,
+                },
+            }
+        ]
+
+        # Override bundle: Providers + hooks + tools + session config
         # CRITICAL: Use dict form with source URIs to preserve module resolution
         # String form would wipe out foundation's source URIs during compose()
         return Bundle(
@@ -273,6 +306,7 @@ class SessionManager:
             version="1.0.0",
             providers=providers,
             tools=tools,
+            hooks=hooks,
             session={
                 "default_provider": active_provider,
                 "orchestrator": {
@@ -497,6 +531,27 @@ class SessionManager:
 
     # -- Sub-Agent Spawning ---------------------------------------------
 
+    def _apply_model_role(self, session: AmplifierSession, agent_name: str) -> None:
+        """Set model_role on a session's coordinator config for routing hook resolution.
+
+        The hooks-routing hook reads model_role from the coordinator config to
+        determine which provider/model tier to use. Each specialist agent maps
+        to a semantic role (fast, coding, reasoning, critique, writing, creative)
+        via AGENT_MODEL_ROLES.
+
+        This follows the amplifier-app-cli pattern where model_role from agent
+        frontmatter is propagated to the session config for the routing hook.
+        """
+        model_role = AGENT_MODEL_ROLES.get(agent_name)
+        if model_role:
+            session.coordinator.config["model_role"] = model_role
+            logger.debug(
+                "Set model_role=%s on session %s for agent %s",
+                model_role,
+                session.session_id,
+                agent_name,
+            )
+
     async def spawn_specialist(
         self,
         parent: AmplifierSession,
@@ -507,6 +562,7 @@ class SessionManager:
 
         Creates a child session with:
         - The agent's system prompt + domain knowledge injected
+        - model_role set for routing hook resolution (from AGENT_MODEL_ROLES)
         - Catalogue tools mounted (can search/access the catalogue)
         - parent_id set for event lineage tracking
         - SSE hooks registered (events route to parent's queue)
@@ -525,6 +581,9 @@ class SessionManager:
             parent_id=parent.session_id,
         )
         logger.info("Created child session: %s (parent=%s)", child.session_id, parent.session_id)
+
+        # Set model_role for routing hook — determines which model tier handles this agent
+        self._apply_model_role(child, agent_name)
 
         # Inject specialist system prompt
         context = child.coordinator.get("context")
@@ -571,6 +630,9 @@ class SessionManager:
 
         session = await self._create_session_from_bundle(bundle_type="recipes")
 
+        # Set model_role for routing hook
+        self._apply_model_role(session, agent_name)
+
         context = session.coordinator.get("context")
         await context.add_message({"role": "system", "content": system_prompt})
 
@@ -604,6 +666,9 @@ class SessionManager:
         system_prompt = self._build_agent_prompt(agent_name)
 
         session = await self._create_session_from_bundle(bundle_type="recipes")
+
+        # Set model_role for routing hook
+        self._apply_model_role(session, agent_name)
 
         context = session.coordinator.get("context")
         await context.add_message({"role": "system", "content": system_prompt})
@@ -679,6 +744,9 @@ class SessionManager:
 
         session = self._sticky_sessions[workflow_id]
         self._last_activity[workflow_id] = datetime.now(UTC)
+
+        # Set model_role for routing hook — updates per agent within the sticky session
+        self._apply_model_role(session, agent_name)
 
         # Build agent-specific system prompt
         system_prompt = self._build_agent_prompt(agent_name)

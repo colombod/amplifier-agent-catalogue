@@ -49,6 +49,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "port": 8000,
         "debug": False,
     },
+    # Routing-matrix configuration for model_role-based provider/model selection.
+    # The matrix determines which provider/model handles each semantic role
+    # (fast, coding, reasoning, critique, writing, creative, etc.).
+    # Available matrices: balanced, quality, economy, anthropic, openai, gemini, copilot
+    "routing": {
+        "matrix": "balanced",
+        "overrides": {},
+    },
 }
 
 

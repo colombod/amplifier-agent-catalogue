@@ -25,14 +25,21 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 # Known provider git sources for installation
+# Mirrors amplifier-app-cli's DEFAULT_PROVIDER_SOURCES for full ecosystem compatibility
 KNOWN_PROVIDER_SOURCES: dict[str, str] = {
     "provider-anthropic": (
         "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main"
     ),
-    "provider-openai": ("git+https://github.com/microsoft/amplifier-module-provider-openai@main"),
+    "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     "provider-azure-openai": (
         "git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main"
     ),
+    "provider-gemini": "git+https://github.com/microsoft/amplifier-module-provider-gemini@main",
+    "provider-github-copilot": (
+        "git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main"
+    ),
+    "provider-ollama": "git+https://github.com/microsoft/amplifier-module-provider-ollama@main",
+    "provider-vllm": "git+https://github.com/microsoft/amplifier-module-provider-vllm@main",
 }
 
 # Fallback display names when provider info unavailable
@@ -41,6 +48,7 @@ _DISPLAY_NAMES: dict[str, str] = {
     "openai": "OpenAI",
     "azure-openai": "Azure OpenAI",
     "gemini": "Google Gemini",
+    "github-copilot": "GitHub Copilot",
     "ollama": "Ollama",
     "vllm": "vLLM",
 }
@@ -50,6 +58,9 @@ PROVIDER_CREDENTIAL_VARS: dict[str, list[str]] = {
     "provider-anthropic": ["ANTHROPIC_API_KEY"],
     "provider-openai": ["OPENAI_API_KEY"],
     "provider-azure-openai": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
+    "provider-gemini": ["GOOGLE_API_KEY"],
+    "provider-github-copilot": ["GITHUB_TOKEN"],
+    "provider-ollama": [],  # No credentials needed (local)
 }
 
 

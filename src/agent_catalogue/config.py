@@ -73,6 +73,21 @@ class ServerConfig:
 
 
 @dataclass
+class RoutingConfig:
+    """Configuration for the routing-matrix model routing hook.
+
+    The routing-matrix maps semantic model roles (fast, coding, reasoning, etc.)
+    to concrete provider/model pairs. The active matrix determines the default
+    mapping, and per-role overrides allow fine-tuning.
+
+    Follows the amplifier-app-cli pattern from runtime/config.py.
+    """
+
+    matrix: str = "balanced"
+    overrides: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Config:
     """Main configuration combining all sub-configs.
 
@@ -83,6 +98,7 @@ class Config:
     embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
     raw_settings: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -142,11 +158,18 @@ class Config:
             debug=bool(srv.get("debug", False)),
         )
 
+        rout = settings.get("routing", {})
+        routing = RoutingConfig(
+            matrix=rout.get("matrix", "balanced"),
+            overrides=rout.get("overrides", {}),
+        )
+
         return cls(
             providers=providers,
             embeddings=embeddings,
             storage=storage,
             server=server,
+            routing=routing,
             raw_settings=settings,
         )
 
