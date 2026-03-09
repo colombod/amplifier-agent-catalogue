@@ -1,0 +1,79 @@
+digraph recipe_differentiate {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10 shape=box style="rounded,filled" fillcolor="#e8f4fd" color="#4a90d9"]
+    edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+    label="Recipe: differentiate-agent.yaml"
+    labelloc=t
+    fontsize=14
+
+    start [label="POST /api/recipe/start\n{recipe_path, context:\n{content, overlapping_agent_ids}}" shape=oval fillcolor="#d4edda"]
+
+    subgraph cluster_setup {
+        label="Recipe Setup"
+        style="filled"
+        fillcolor="#f8f9fa"
+        color="#dee2e6"
+
+        temp_session [label="Create Temp Session\n(has tool-recipes)"]
+        register_spawn [label="Register session.spawn\ncapability (callback)"]
+    }
+
+    subgraph cluster_stage1 {
+        label="Stage 1: strategic-analysis"
+        style="filled"
+        fillcolor="#f0f7ff"
+        color="#4a90d9"
+
+        step1 [label="Step: analyze-overlap\n(differentiator agent)" fillcolor="#cce5ff"]
+        tool_calls [label="Agent calls tools:\nget_agent_content(id1)\nget_agent_content(id2)\nget_agent_content(id3)" fillcolor="#fff3cd"]
+        analysis [label="Output: JSON\n{overlap_analysis,\nstrategies[2-3],\nrecommended_index}" fillcolor="#d4edda"]
+        step2 [label="Step: format-for-approval\n(differentiator agent)\nFormat as readable markdown" fillcolor="#cce5ff"]
+    }
+
+    subgraph cluster_gate {
+        label=""
+        style="filled"
+        fillcolor="#fff3cd"
+        color="#ffc107"
+
+        gate [label="APPROVAL GATE\n(timeout: indefinite\ndefault: deny)" shape=octagon fillcolor="#fff3cd" color="#dc3545"]
+    }
+
+    subgraph cluster_decision {
+        label=""
+        style=invis
+
+        approved [label="Approved?" shape=diamond fillcolor="#fff3cd"]
+    }
+
+    subgraph cluster_stage2 {
+        label="Stage 2: strategy-application"
+        style="filled"
+        fillcolor="#f0fff0"
+        color="#28a745"
+
+        apply [label="Step: apply-recommended-strategy\n(differentiator agent)\nApply chosen strategy to content" fillcolor="#cce5ff"]
+        output [label="Output: refined_content\n(raw AGENTS.md markdown)" fillcolor="#d4edda"]
+    }
+
+    denied [label="Recipe Cancelled\nOriginal Preserved" shape=oval fillcolor="#f8d7da"]
+    completed [label="Recipe Completed\n{refined_content}" shape=oval fillcolor="#d4edda"]
+
+    start -> temp_session
+    temp_session -> register_spawn
+    register_spawn -> step1
+    step1 -> tool_calls
+    tool_calls -> analysis
+    analysis -> step2
+    step2 -> gate
+
+    gate -> approved [label="  POST /api/recipe/approve"]
+
+    approved -> apply [label="approve"]
+    approved -> denied [label="deny" color="#dc3545"]
+
+    apply -> output
+    output -> completed
+}

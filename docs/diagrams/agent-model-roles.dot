@@ -1,0 +1,72 @@
+digraph agent_model_roles {
+    rankdir=LR
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10 shape=box style="rounded,filled"]
+    edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+    label="Agent-to-Model Role Routing"
+    labelloc=t
+    fontsize=14
+
+    subgraph cluster_agents {
+        label="Specialist Agents"
+        style="filled"
+        fillcolor="#f0f7ff"
+        color="#4a90d9"
+
+        extractor [label="extractor\nJSON extraction" fillcolor="#cce5ff"]
+        classifier [label="classifier\nDomain tagging" fillcolor="#cce5ff"]
+        relevance [label="relevance\nRelevance scoring" fillcolor="#cce5ff"]
+        evaluator [label="evaluator\nQuality scoring" fillcolor="#cce5ff"]
+        comparator [label="comparator\nBehavioral diff" fillcolor="#cce5ff"]
+        improver [label="improver\nContent rewrite" fillcolor="#cce5ff"]
+        narrator [label="narrator\nProse generation" fillcolor="#cce5ff"]
+        discovery [label="discovery\nHyDE generation" fillcolor="#cce5ff"]
+        differentiator [label="differentiator\nStrategic positioning" fillcolor="#cce5ff"]
+    }
+
+    subgraph cluster_roles {
+        label="Model Roles (routing-matrix)"
+        style="filled"
+        fillcolor="#f8f9fa"
+        color="#dee2e6"
+
+        fast [label="fast\nHaiku / gpt-5-mini\n(cheap, quick)" fillcolor="#d4edda" shape=ellipse]
+        critique [label="critique\nSonnet (high reasoning)\n(analytical)" fillcolor="#fff3cd" shape=ellipse]
+        coding [label="coding\nSonnet / Codex\n(generation)" fillcolor="#cce5ff" shape=ellipse]
+        writing [label="writing\nOpus / gpt-5.2\n(long-form)" fillcolor="#f8d7da" shape=ellipse]
+        creative [label="creative\nOpus / gpt-5.2\n(ideation)" fillcolor="#e8daef" shape=ellipse]
+        reasoning [label="reasoning\nOpus (high reasoning)\n(complex analysis)" fillcolor="#fce4ec" shape=ellipse]
+    }
+
+    subgraph cluster_providers {
+        label="Resolved Provider/Model\n(from active routing matrix)"
+        style="filled"
+        fillcolor="#fff8e1"
+        color="#ffc107"
+
+        resolved [label="Best available\nprovider + model\nfor each role" shape=hexagon fillcolor="#fff3cd"]
+    }
+
+    extractor -> fast
+    classifier -> fast
+    relevance -> fast
+
+    evaluator -> critique
+    comparator -> critique
+
+    improver -> coding
+
+    narrator -> writing
+
+    discovery -> creative
+
+    differentiator -> reasoning
+
+    fast -> resolved
+    critique -> resolved
+    coding -> resolved
+    writing -> resolved
+    creative -> resolved
+    reasoning -> resolved
+}

@@ -467,6 +467,57 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`
 
 ---
 
+## Architecture Flow Diagrams
+
+Visual documentation of the application's workflow and orchestration patterns.
+Source DOT files are in [`docs/diagrams/`](docs/diagrams/) and can be re-rendered
+with `dot -Tpng file.dot -o file.png`.
+
+### Bundle Composition & Session Creation
+
+How the Amplifier bundle is assembled at startup and how sessions are created
+per-request. Shows the foundation bundle, override bundle (providers, routing
+hook, tools), and the per-session lifecycle including `model_role` application.
+
+![Bundle Composition](docs/diagrams/bundle-composition.png)
+
+### Agent-to-Model Role Routing
+
+Each specialist agent is mapped to a semantic model role. The `hooks-routing`
+hook resolves these roles to concrete provider/model pairs using the active
+routing matrix (balanced, quality, economy, copilot, etc.).
+
+![Agent Model Roles](docs/diagrams/agent-model-roles.png)
+
+### Agent Onboarding Flow (Sticky Session)
+
+The primary multi-step workflow for uploading, analyzing, evaluating, improving,
+and differentiating an AGENTS.md file. Uses sticky sessions so context
+accumulates across all agents. Workflow metadata (similar agents, overlap
+scores) is preserved across stages.
+
+![Onboarding Flow](docs/diagrams/onboarding-flow.png)
+
+### HyDE Semantic Search Flow
+
+The three-phase Hypothetical Document Embedding search pipeline:
+1. **Discovery agent** generates a hypothetical AGENTS.md matching the query
+2. **Vector search** finds similar agents using the hypothetical document's embedding
+3. **Relevance agent** filters and explains results
+
+![HyDE Search Flow](docs/diagrams/search-hyde-flow.png)
+
+### Recipe: Strategic Differentiation
+
+The approval-gated recipe workflow for differentiating an agent from overlapping
+catalogue entries. Stage 1 analyzes overlap and proposes strategies (with an
+approval gate). Stage 2 applies the recommended strategy to produce a refined
+AGENTS.md.
+
+![Recipe Differentiate](docs/diagrams/recipe-differentiate.png)
+
+---
+
 ## License
 
 [Add license information]

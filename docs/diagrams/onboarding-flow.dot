@@ -1,0 +1,94 @@
+digraph onboarding_flow {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10 shape=box style="rounded,filled" fillcolor="#e8f4fd" color="#4a90d9"]
+    edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+    label="Agent Onboarding Flow (Sticky Session)"
+    labelloc=t
+    fontsize=14
+
+    start [label="User Uploads\nAGENTS.md" shape=oval fillcolor="#d4edda"]
+
+    subgraph cluster_analyze {
+        label="POST /api/stream/analyze"
+        style="filled"
+        fillcolor="#f0f7ff"
+        color="#4a90d9"
+
+        parse [label="Parse Document\n(content hash)"]
+        dup_check [label="Duplicate\nCheck?" shape=diamond fillcolor="#fff3cd"]
+        extractor [label="Extractor Agent\n(model_role: fast)\nExtract JSON metadata" fillcolor="#cce5ff"]
+        classifier [label="Classifier Agent\n(model_role: fast)\nDomain + tags" fillcolor="#cce5ff"]
+        embed [label="Embed Content\n(Azure OpenAI)"]
+        find_sim [label="Find Similar\n(vector search)"]
+        store_meta [label="Store in\nWorkflow Metadata\n(similar_agents,\nhighest_similarity)"]
+    }
+
+    subgraph cluster_evaluate {
+        label="POST /api/stream/evaluate"
+        style="filled"
+        fillcolor="#f0fff0"
+        color="#28a745"
+
+        evaluator [label="Evaluator Agent\n(model_role: critique)\nScore 5 dimensions\n(enriched with similar_agents)" fillcolor="#cce5ff"]
+        grade [label="Quality Grade\nA/B/C/D/F" shape=diamond fillcolor="#fff3cd"]
+    }
+
+    subgraph cluster_decision {
+        label="Decision Point"
+        style="filled"
+        fillcolor="#fffff0"
+        color="#ffc107"
+
+        decision [label="What to do?" shape=diamond fillcolor="#fff3cd"]
+    }
+
+    subgraph cluster_improve {
+        label="POST /api/stream/improve"
+        style="filled"
+        fillcolor="#fff0f0"
+        color="#dc3545"
+
+        catalogue_lookup [label="Catalogue Neighbour\nLookup (loose threshold)"]
+        skip_eval [label="Skip Re-eval?\n(if evaluation provided)" shape=diamond fillcolor="#fff3cd"]
+        improver [label="Improver Agent\n(model_role: coding)\nRewrite with fixes" fillcolor="#cce5ff"]
+    }
+
+    subgraph cluster_refine {
+        label="POST /api/stream/refine"
+        style="filled"
+        fillcolor="#f5f0ff"
+        color="#6f42c1"
+
+        differentiator [label="Differentiator Agent\n(model_role: reasoning)\n5 frameworks" fillcolor="#cce5ff"]
+    }
+
+    upload [label="POST /api/upload\nCommit to Catalogue" fillcolor="#d4edda"]
+    cleanup [label="DELETE /api/session\nCleanup Sticky Session" shape=oval fillcolor="#f8d7da"]
+
+    start -> parse
+    parse -> dup_check
+    dup_check -> extractor [label="new"]
+    dup_check -> cleanup [label="duplicate" style=dashed color="#dc3545"]
+    extractor -> classifier
+    classifier -> embed
+    embed -> find_sim
+    find_sim -> store_meta
+
+    store_meta -> evaluator [label="workflow_id\ncarries context" style=bold]
+    evaluator -> grade
+
+    grade -> decision
+    decision -> upload [label="high quality\nno overlap"]
+    decision -> catalogue_lookup [label="quality issues"]
+    decision -> differentiator [label="catalogue overlap"]
+
+    catalogue_lookup -> skip_eval
+    skip_eval -> improver [label="yes: use\nprovided eval"]
+    skip_eval -> evaluator [label="no: re-evaluate" style=dashed]
+    improver -> upload [label="improved content"]
+
+    differentiator -> upload [label="refined content"]
+    upload -> cleanup
+}

@@ -1,0 +1,54 @@
+digraph search_hyde {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10 shape=box style="rounded,filled" fillcolor="#e8f4fd" color="#4a90d9"]
+    edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+    label="HyDE Semantic Search Flow"
+    labelloc=t
+    fontsize=14
+
+    query [label="User Search Query\n\"Find an agent that\nhelps with code review\"" shape=oval fillcolor="#d4edda"]
+
+    subgraph cluster_hyde {
+        label="Phase 1: HyDE Generation"
+        style="filled"
+        fillcolor="#f5f0ff"
+        color="#6f42c1"
+
+        discovery [label="Discovery Agent\n(model_role: creative)\nGenerate hypothetical\nAGENTS.md matching intent" fillcolor="#cce5ff"]
+        hypo_doc [label="Hypothetical Document\n(3-5 sentences,\nagent definition style)" fillcolor="#d4edda"]
+    }
+
+    subgraph cluster_search {
+        label="Phase 2: Vector Search"
+        style="filled"
+        fillcolor="#f8f9fa"
+        color="#dee2e6"
+
+        embed [label="Embed Hypothetical Doc\n(Azure OpenAI)"]
+        vector_search [label="Vector Similarity Search\n(DuckDB, threshold: 0.3)"]
+        empty_check [label="Results?" shape=diamond fillcolor="#fff3cd"]
+    }
+
+    subgraph cluster_relevance {
+        label="Phase 3: Relevance Filtering"
+        style="filled"
+        fillcolor="#f0fff0"
+        color="#28a745"
+
+        relevance [label="Relevance Agent\n(model_role: fast)\nScore + explain each result\nFilter irrelevant matches" fillcolor="#cce5ff"]
+    }
+
+    results [label="Filtered Results\n{agent, score, explanation}\n+ hypothetical_doc" shape=oval fillcolor="#d4edda"]
+    no_results [label="No Results Found" shape=oval fillcolor="#f8d7da"]
+
+    query -> discovery
+    discovery -> hypo_doc
+    hypo_doc -> embed
+    embed -> vector_search
+    vector_search -> empty_check
+    empty_check -> relevance [label="found"]
+    empty_check -> no_results [label="empty" color="#dc3545"]
+    relevance -> results
+}

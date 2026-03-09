@@ -1,0 +1,64 @@
+digraph bundle_composition {
+    rankdir=TB
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10 shape=box style="rounded,filled" fillcolor="#e8f4fd" color="#4a90d9"]
+    edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+    label="Bundle Composition & Session Creation"
+    labelloc=t
+    fontsize=14
+
+    subgraph cluster_startup {
+        label="Startup Phase (once)"
+        style="dashed"
+        color="#999999"
+        fontcolor="#666666"
+
+        install [label="Install Provider SDKs\n(uv pip install)" fillcolor="#fff3cd"]
+        load_foundation [label="Load Foundation Bundle\n(amplifier-foundation@main)"]
+        create_override [label="Create Override Bundle"]
+
+        subgraph cluster_override {
+            label="Override Bundle Contents"
+            style="filled"
+            fillcolor="#f8f9fa"
+            color="#dee2e6"
+
+            providers [label="Providers\n(Anthropic, OpenAI, Azure,\nGemini, GitHub Copilot,\nOllama, vLLM)" fillcolor="#d4edda"]
+            routing_hook [label="hooks-routing\n(routing-matrix)" fillcolor="#f8d7da"]
+            tool_recipes [label="tool-recipes" fillcolor="#cce5ff"]
+            orchestrator [label="loop-basic\n+ context-simple" fillcolor="#e2e3e5"]
+        }
+
+        compose [label="foundation.compose(override)"]
+        prepare [label="prepared = composed.prepare()\n(downloads modules, cached)" fillcolor="#fff3cd"]
+    }
+
+    subgraph cluster_session {
+        label="Per-Request (fast)"
+        style="dashed"
+        color="#999999"
+        fontcolor="#666666"
+
+        create_session [label="prepared.create_session()"]
+        apply_role [label="_apply_model_role()\nsets coordinator.config[\"model_role\"]" fillcolor="#f8d7da"]
+        inject_prompt [label="Inject Agent System Prompt\n+ Knowledge Files"]
+        mount_tools [label="Mount 8 Catalogue Tools\n(search, store, embed, etc.)" fillcolor="#d4edda"]
+        execute [label="session.execute(instruction)" fillcolor="#fff3cd"]
+    }
+
+    install -> load_foundation
+    load_foundation -> create_override
+    create_override -> providers [style=dashed arrowhead=none]
+    create_override -> routing_hook [style=dashed arrowhead=none]
+    create_override -> tool_recipes [style=dashed arrowhead=none]
+    create_override -> orchestrator [style=dashed arrowhead=none]
+    create_override -> compose
+    compose -> prepare
+
+    prepare -> create_session [label="  reused" style=bold]
+    create_session -> apply_role
+    apply_role -> inject_prompt
+    inject_prompt -> mount_tools
+    mount_tools -> execute
+}
